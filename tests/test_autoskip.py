@@ -3,6 +3,7 @@ from pynput.mouse import Button
 from unittest.mock import patch, MagicMock
 from src.autoskip_dialogue import ScreenConfig, LoggerManager, PixelSampler, InputRemapper, AutoSkipper
 
+
 class TestScreenConfig(unittest.TestCase):
     @patch('src.autoskip_dialogue.GetSystemMetrics')
     def test_load_with_env(self, mock_get_system_metrics):
@@ -19,6 +20,7 @@ class TestScreenConfig(unittest.TestCase):
         self.assertEqual(config.WIDTH, 1920)
         self.assertEqual(config.HEIGHT, 1080)
 
+
 class TestLoggerManager(unittest.TestCase):
     @patch('src.autoskip_dialogue.logging')
     def test_toggle_file_logging(self, mock_logging):
@@ -29,6 +31,7 @@ class TestLoggerManager(unittest.TestCase):
         logger_mgr.toggle_file_logging()
         self.assertIsNone(logger_mgr.file_handler)
 
+
 class TestPixelSampler(unittest.TestCase):
     @patch('src.autoskip_dialogue.pixel')
     def test_get_pixel(self, mock_pixel):
@@ -36,6 +39,7 @@ class TestPixelSampler(unittest.TestCase):
         mock_pixel.return_value = (255, 255, 255)
         color = sampler.get(100, 100)
         self.assertEqual(color, (255, 255, 255))
+
 
 class TestInputRemapper(unittest.TestCase):
     @patch('src.autoskip_dialogue.KeyboardController')
@@ -45,16 +49,22 @@ class TestInputRemapper(unittest.TestCase):
         remapper.on_click(0, 0, Button.x1, True)
         mock_keyboard_controller().press.assert_called_with('t')
 
+
 class TestAutoSkipper(unittest.TestCase):
-    @patch('src.autoskip_dialogue.gw.getActiveWindow')
-    def test_is_genshin_active(self, mock_get_active_window):
-        mock_get_active_window.return_value.title = "Genshin Impact"
+    @patch('src.autoskip_dialogue.GetForegroundWindow')
+    @patch('src.autoskip_dialogue.GetWindowText')
+    def test_is_genshin_active(self, mock_get_window_text, mock_get_foreground):
+        mock_get_foreground.return_value = 123
+        mock_get_window_text.return_value = "Genshin Impact"
         self.assertTrue(AutoSkipper.is_genshin_active())
 
-    @patch('src.autoskip_dialogue.gw.getActiveWindow')
-    def test_is_not_genshin_active(self, mock_get_active_window):
-        mock_get_active_window.return_value.title = "Other Game"
+    @patch('src.autoskip_dialogue.GetForegroundWindow')
+    @patch('src.autoskip_dialogue.GetWindowText')
+    def test_is_not_genshin_active(self, mock_get_window_text, mock_get_foreground):
+        mock_get_foreground.return_value = 123
+        mock_get_window_text.return_value = "Other Game"
         self.assertFalse(AutoSkipper.is_genshin_active())
+
 
 if __name__ == '__main__':
     unittest.main()

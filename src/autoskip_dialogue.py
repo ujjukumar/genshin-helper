@@ -161,16 +161,16 @@ class InputRemapper:
                 self.keyboard.release('t')
                 logger.info("Remap: Mouse4 -> T")
             elif button == Button.x2:
-                # toggle event
-                if self._spam_event.is_set():
-                    self._spam_event.clear()
-                    logger.info("Spam-F: OFF")
+                # one-shot spam of 'f' for a short duration (2s)
+                if not self._is_genshin_active():
+                    # don't spam if Genshin isn't active
+                    return
+                if self._spam_thread and self._spam_thread.is_alive():
+                    logger.info("Spam-F: already running")
                 else:
-                    self._spam_event.set()
-                    logger.info("Spam-F: ON")
-                    if not self._spam_thread or not self._spam_thread.is_alive():
-                        self._spam_thread = Thread(target=self._spam_loop, daemon=True)
-                        self._spam_thread.start()
+                    logger.info("Spam-F: 2s burst")
+                    self._spam_thread = Thread(target=lambda: self._spam_for_duration(2.0), daemon=True)
+                    self._spam_thread.start()
         except Exception as e:
             logger.error(f"Mouse handler error: {e}")
 
@@ -186,6 +186,27 @@ class InputRemapper:
              delay = self._rand.uniform(0.08, 0.18)
              Event().wait(delay)
         logger.info("Spam-F loop stopped")
+
+    def _spam_for_duration(self, duration: float = 2.0) -> None:
+        """Spam the 'f' key repeatedly for `duration` seconds, then stop."""
+        logger.info(f"Spam-F for {duration:.1f}s started")
+        end = perf_counter() + duration
+        try:
+            while perf_counter() < end:
+                try:
+                    if self._is_genshin_active():
+                        press('f')
+                except Exception as e:
+                    logger.error(f"Spam-F error: {e}")
+                # sleep but don't overshoot the end time
+                remaining = end - perf_counter()
+                if remaining <= 0:
+                    break
+                delay = min(self._rand.uniform(0.08, 0.18), remaining)
+                Event().wait(delay)
+        except Exception as e:
+            logger.error(f"Spam-F loop crashed: {e}")
+        logger.info("Spam-F finished")
 
 
 class AutoSkipper:

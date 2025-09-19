@@ -148,8 +148,7 @@ class InputRemapper:
         self.keyboard = KeyboardController()
         self._is_genshin_active = is_active_fn
         self._spam_thread: Optional[Thread] = None
-        # use Event for thread-safe start/stop signalling
-        self._spam_event = Event()
+        # spam thread used for one-shot short bursts
         self._rand = rand
 
     def on_click(self, _x, _y, button, pressed) -> None:
@@ -173,19 +172,6 @@ class InputRemapper:
                     self._spam_thread.start()
         except Exception as e:
             logger.error(f"Mouse handler error: {e}")
-
-    def _spam_loop(self) -> None:
-        logger.info("Spam-F loop started")
-        while self._spam_event.is_set():
-             try:
-                 if self._is_genshin_active():
-                     press('f')
-             except Exception as e:
-                 logger.error(f"Spam-F error: {e}")
-             # approximate original 0.08–0.18
-             delay = self._rand.uniform(0.08, 0.18)
-             Event().wait(delay)
-        logger.info("Spam-F loop stopped")
 
     def _spam_for_duration(self, duration: float = 2.0) -> None:
         """Spam the 'f' key repeatedly for `duration` seconds, then stop."""
@@ -426,7 +412,7 @@ class AutoSkipper:
         print("F9: Pause")
         print("F12: Exit")
         print("Mouse4: T key (interact remap)")
-        print("Mouse5: Toggle rapid F spam\n")
+        print("Mouse5: 2s rapid F burst\n")
 
 
 def main() -> None:

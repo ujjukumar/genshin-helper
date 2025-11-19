@@ -6,6 +6,7 @@ from logging.handlers import RotatingFileHandler
 from random import Random
 from threading import Thread, Event
 import threading
+import time
 from time import perf_counter
 from typing import Optional, Tuple, Callable, Dict
 
@@ -21,13 +22,13 @@ import ctypes
 PLAYING_ICON_COLOR = (236, 229, 216)
 WHITE = (255, 255, 255)
 
-logging.basicConfig(
-    level=logging.DEBUG,
-    format="%(asctime)s [%(levelname)s] %(message)s",
-    handlers=[logging.StreamHandler()]
-)
 logger = logging.getLogger(__name__)
 
+class LogFormatter(logging.Formatter):
+    def formatTime(self, record, datefmt=None):
+        ct = self.converter(record.created)
+        t = time.strftime("%H:%M:%S", ct)
+        return f"{t}.{int(record.msecs):03d}"
 
 @dataclass
 class ScreenConfig:
@@ -117,8 +118,16 @@ class ScreenConfig:
 
 
 class LoggerManager:
-    def __init__(self) -> None:
+    def __init__(self, verbose: bool = False) -> None:
         self.file_handler: Optional[logging.FileHandler] = None
+        self.formatter = LogFormatter("%(asctime)s | %(levelname)-8s | %(message)s")
+        
+        # Setup console logging
+        level = logging.DEBUG if verbose else logging.INFO
+        handler = logging.StreamHandler()
+        handler.setFormatter(self.formatter)
+        
+        logging.basicConfig(level=level, handlers=[handler], force=True)
 
     def toggle_file_logging(self) -> None:
         if self.file_handler:
@@ -129,9 +138,10 @@ class LoggerManager:
             return
         # rotate at 5MB, keep 3 backups
         self.file_handler = RotatingFileHandler("autoskip_dialogue.log", encoding="utf-8", maxBytes=5_000_000, backupCount=3)
-        self.file_handler.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(message)s"))
+        self.file_handler.setLevel(logging.DEBUG)
+        self.file_handler.setFormatter(self.formatter)
         logger.addHandler(self.file_handler)
-        logger.info("File logging enabled: autoskip_dialogue.log")
+        logger.info("File logging enabled: autoskip_dialogue.log (Level: DEBUG)")
 
 
 class PixelSampler:
@@ -166,7 +176,7 @@ class PixelSampler:
             self.total_failures += 1
             if self.total_failures - self._last_warn >= 25:
                 self._last_warn = self.total_failures
-                logger.debug(f"Pixel failures total={self.total_failures} unique={len(self.fail_counts)}")
+                logger.warning(f"Pixel failures total={self.total_failures} unique={len(self.fail_counts)}")
             return None
 
     @staticmethod
@@ -207,8 +217,8 @@ class InputRemapper:
                         logger.info("Spam-F: 4s burst")
                         self._spam_thread = Thread(target=lambda: self._spam_for_duration(4.0), daemon=True)
                         self._spam_thread.start()
-        except Exception as e:
-            logger.error(f"Mouse handler error: {e}")
+        except Exception:
+            logger.exception("Mouse handler error")
 
     def _spam_for_duration(self, duration: float = 4.0) -> None:
         """Spam the 'f' key repeatedly for `duration` seconds, then stop."""
@@ -219,16 +229,16 @@ class InputRemapper:
                 try:
                     if self._is_genshin_active():
                         press('f')
-                except Exception as e:
-                    logger.error(f"Spam-F error: {e}")
+                except Exception:
+                    logger.exception("Spam-F error")
                 # sleep but don't overshoot the end time
                 remaining = end - perf_counter()
                 if remaining <= 0:
                     break
                 delay = min(self._rand.uniform(0.08, 0.18), remaining)
                 Event().wait(delay)
-        except Exception as e:
-            logger.error(f"Spam-F loop crashed: {e}")
+        except Exception:
+            logger.exception("Spam-F loop crashed")
         logger.info("Spam-F finished")
 
 
@@ -257,6 +267,8 @@ class AutoSkipper:
         self._burst_mode = False
         self._burst_remaining = 0
         self._post_burst_pause_until = 0.0
+        self._in_dialogue = False
+        self._window_active = False
 
         self.wake_event = Event()
         self.input_remapper = InputRemapper(self.is_genshin_active, rand)
@@ -338,7 +350,15 @@ class AutoSkipper:
                 self._last_press_time = perf_counter()
                 continue
 
-            if not self.is_genshin_active():
+            is_active = self.is_genshin_active()
+            if is_active != self._window_active:
+                self._window_active = is_active
+                if is_active:
+                    logger.info("Window State: ACTIVE")
+                else:
+                    logger.info("Window State: INACTIVE")
+
+            if not is_active:
                 self._sleep_until(now + 0.4)
                 continue
 
@@ -360,9 +380,17 @@ class AutoSkipper:
 
             # dialogue state check (throttled)
             if now >= next_state_check:
-                in_dialogue = self._dialogue_playing() or self._dialogue_choice()
+                is_dialogue = self._dialogue_playing() or self._dialogue_choice()
+                
+                if is_dialogue != self._in_dialogue:
+                    self._in_dialogue = is_dialogue
+                    if is_dialogue:
+                        logger.info("Dialogue State: DETECTED")
+                    else:
+                        logger.info("Dialogue State: ENDED")
+
                 next_state_check = now + 0.15  # throttle pixel polling
-                if not in_dialogue:
+                if not is_dialogue:
                     self._sleep_until(now + 0.25)
                     continue
 
@@ -427,8 +455,8 @@ class AutoSkipper:
                     self._burst_mode = False
                     self._post_burst_pause_until = now + self.rand.uniform(0.4, 1.0)
 
-        except Exception as e:
-            logger.error(f"Press error: {e}")
+        except Exception:
+            logger.exception("Press error")
 
         self._last_press_time = now
         self._next_interval = self._next_key_interval()
@@ -455,6 +483,7 @@ class AutoSkipper:
 def main() -> None:
     parser = argparse.ArgumentParser(add_help=False)
     parser.add_argument("--no-interactive", action="store_true", help="Disable interactive resolution prompt")
+    parser.add_argument("--verbose", "-v", action="store_true", help="Enable verbose (DEBUG) logging")
     parser.add_argument("--seed", type=int, default=None, help="Deterministic RNG seed")
     args, _ = parser.parse_known_args()
 
@@ -464,11 +493,14 @@ def main() -> None:
         if env_seed and env_seed.isdigit():
             seed = int(env_seed)
     rand = Random(seed)
+    
+    # Initialize LoggerManager first as it handles logging setup
+    logger_mgr = LoggerManager(verbose=args.verbose)
+    
     if seed is not None:
         logger.info(f"Deterministic seed: {seed}")
 
     config = ScreenConfig.load(interactive=not args.no_interactive)
-    logger_mgr = LoggerManager()
     skipper = AutoSkipper(config, logger_mgr, rand)
 
     t = Thread(target=skipper.run_loop, daemon=True)

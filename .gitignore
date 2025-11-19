@@ -3,3 +3,5 @@
 *.log
 */__pycache__/*
 .vscode/
+dotnet/obj/
+dotnet/bin/

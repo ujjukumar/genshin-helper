@@ -20,7 +20,7 @@ PLAYING_ICON_COLOR = (236, 229, 216)
 WHITE = (255, 255, 255)
 
 logging.basicConfig(
-    level=logging.DEBUG,
+    level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s",
     handlers=[logging.StreamHandler()]
 )
@@ -168,7 +168,7 @@ class InputRemapper:
                     logger.info("Spam-F: already running")
                 else:
                     logger.info("Spam-F: 2s burst")
-                    self._spam_thread = Thread(target=lambda: self._spam_for_duration(2.0), daemon=True)
+                    self._spam_thread = Thread(target=lambda: self._spam_for_duration(4.0), daemon=True)
                     self._spam_thread.start()
         except Exception as e:
             logger.error(f"Mouse handler error: {e}")

@@ -5,6 +5,7 @@ from dataclasses import dataclass, field
 from logging.handlers import RotatingFileHandler
 from random import Random
 from threading import Thread, Event
+import threading
 from time import perf_counter
 from typing import Optional, Tuple, Callable, Dict
 
@@ -14,13 +15,14 @@ from pyautogui import press, pixel
 from pynput.keyboard import Key, KeyCode, Listener as KeyboardListener, Controller as KeyboardController
 from pynput.mouse import Listener as MouseListener, Button
 from dotenv import find_dotenv, load_dotenv, set_key
+import ctypes
 
 # --- constants ---
 PLAYING_ICON_COLOR = (236, 229, 216)
 WHITE = (255, 255, 255)
 
 logging.basicConfig(
-    level=logging.INFO,
+    level=logging.DEBUG,
     format="%(asctime)s [%(levelname)s] %(message)s",
     handlers=[logging.StreamHandler()]
 )
@@ -36,6 +38,7 @@ class ScreenConfig:
     PLAYING_ICON: Tuple[int, int] = field(init=False)
     DIALOGUE_ICON: Tuple[int, int, int] = field(init=False)
     LOADING_PIXEL: Tuple[int, int] = field(init=False)
+    WINDOW_TITLE: str = field(init=False, default="Genshin Impact")
 
     def __post_init__(self):
         self.PLAYING_ICON = self._calc_playing_icon()
@@ -46,27 +49,35 @@ class ScreenConfig:
     def load(cls, interactive: bool = True) -> "ScreenConfig":
         load_dotenv()
         w_env, h_env = os.getenv("WIDTH", ""), os.getenv("HEIGHT", "")
+        window_title = os.getenv("WINDOW_TITLE", "Genshin Impact")
+        
+        instance = None
         if w_env and h_env:
             try:
-                return cls(int(w_env), int(h_env))
+                instance = cls(int(w_env), int(h_env))
             except ValueError:
                 logger.warning("Invalid WIDTH/HEIGHT in .env, re-detecting.")
-        w, h = GetSystemMetrics(0), GetSystemMetrics(1)
-        if interactive:
-            print(f"Detected Resolution: {w}x{h}")
-            print("Is the resolution correct? (y/n) ", end="")
-            if input().strip().lower().startswith("n"):
-                w = int(input("Enter resolution width: ").strip())
-                h = int(input("Enter resolution height: ").strip())
-                print(f"New resolution set to {w}x{h}\n")
-        dotenv_file = find_dotenv()
-        if dotenv_file:
-            set_key(dotenv_file, "WIDTH", str(w), quote_mode="never")
-            set_key(dotenv_file, "HEIGHT", str(h), quote_mode="never")
-        else:
-            with open(".env", "w", encoding="utf-8") as f:
-                f.write(f"WIDTH={w}\nHEIGHT={h}\n")
-        return cls(w, h)
+        
+        if instance is None:
+            w, h = GetSystemMetrics(0), GetSystemMetrics(1)
+            if interactive:
+                print(f"Detected Resolution: {w}x{h}")
+                print("Is the resolution correct? (y/n) ", end="")
+                if input().strip().lower().startswith("n"):
+                    w = int(input("Enter resolution width: ").strip())
+                    h = int(input("Enter resolution height: ").strip())
+                    print(f"New resolution set to {w}x{h}\n")
+            dotenv_file = find_dotenv()
+            if dotenv_file:
+                set_key(dotenv_file, "WIDTH", str(w), quote_mode="never")
+                set_key(dotenv_file, "HEIGHT", str(h), quote_mode="never")
+            else:
+                with open(".env", "w", encoding="utf-8") as f:
+                    f.write(f"WIDTH={w}\nHEIGHT={h}\n")
+            instance = cls(w, h)
+            
+        instance.WINDOW_TITLE = window_title
+        return instance
 
     def _wa(self, x: int) -> int:
         return int(x / self.BASE_W * self.WIDTH)
@@ -128,19 +139,41 @@ class PixelSampler:
         self.fail_counts: Dict[Tuple[int, int], int] = {}
         self.total_failures = 0
         self._last_warn = 0
+        self._gdi32 = ctypes.windll.gdi32
+        self._user32 = ctypes.windll.user32
+        self._hdc = self._user32.GetDC(0)
+
+    def __del__(self):
+        try:
+            if self._hdc:
+                self._user32.ReleaseDC(0, self._hdc)
+        except Exception:
+            pass
 
     def get(self, x: int, y: int) -> Optional[Tuple[int, int, int]]:
         try:
-            return pixel(x, y)
+            color_ref = self._gdi32.GetPixel(self._hdc, x, y)
+            if color_ref == 0xFFFFFFFF:  # CLR_INVALID
+                return None
+            # COLORREF is 0x00bbggrr
+            r = color_ref & 0xFF
+            g = (color_ref >> 8) & 0xFF
+            b = (color_ref >> 16) & 0xFF
+            return (r, g, b)
         except Exception:
             key = (x, y)
             self.fail_counts[key] = self.fail_counts.get(key, 0) + 1
             self.total_failures += 1
-            # log rarely
             if self.total_failures - self._last_warn >= 25:
                 self._last_warn = self.total_failures
                 logger.debug(f"Pixel failures total={self.total_failures} unique={len(self.fail_counts)}")
             return None
+
+    @staticmethod
+    def colors_match(c1: Tuple[int, int, int], c2: Tuple[int, int, int], tolerance: int = 10) -> bool:
+        if not c1 or not c2:
+            return False
+        return all(abs(a - b) <= tolerance for a, b in zip(c1, c2))
 
 
 class InputRemapper:
@@ -148,6 +181,7 @@ class InputRemapper:
         self.keyboard = KeyboardController()
         self._is_genshin_active = is_active_fn
         self._spam_thread: Optional[Thread] = None
+        self._lock = threading.Lock()
         # spam thread used for one-shot short bursts
         self._rand = rand
 
@@ -167,13 +201,16 @@ class InputRemapper:
                 if self._spam_thread and self._spam_thread.is_alive():
                     logger.info("Spam-F: already running")
                 else:
-                    logger.info("Spam-F: 2s burst")
-                    self._spam_thread = Thread(target=lambda: self._spam_for_duration(4.0), daemon=True)
-                    self._spam_thread.start()
+                    with self._lock:
+                        if self._spam_thread and self._spam_thread.is_alive():
+                            return
+                        logger.info("Spam-F: 4s burst")
+                        self._spam_thread = Thread(target=lambda: self._spam_for_duration(4.0), daemon=True)
+                        self._spam_thread.start()
         except Exception as e:
             logger.error(f"Mouse handler error: {e}")
 
-    def _spam_for_duration(self, duration: float = 2.0) -> None:
+    def _spam_for_duration(self, duration: float = 4.0) -> None:
         """Spam the 'f' key repeatedly for `duration` seconds, then stop."""
         logger.info(f"Spam-F for {duration:.1f}s started")
         end = perf_counter() + duration
@@ -225,12 +262,11 @@ class AutoSkipper:
         self.input_remapper = InputRemapper(self.is_genshin_active, rand)
 
     # --- window check ---
-    @staticmethod
-    def is_genshin_active() -> bool:
+    def is_genshin_active(self) -> bool:
         try:
             hwnd = GetForegroundWindow()
             window_title = GetWindowText(hwnd)
-            return "genshin impact" in window_title.lower()
+            return self.config.WINDOW_TITLE.lower() in window_title.lower()
         except Exception:
             return False
 
@@ -260,13 +296,14 @@ class AutoSkipper:
     # --- dialogue detection ---
     def _dialogue_playing(self) -> bool:
         px = self.pixel_sampler.get(*self.config.PLAYING_ICON)
-        return px == PLAYING_ICON_COLOR
+        return self.pixel_sampler.colors_match(px, PLAYING_ICON_COLOR)
 
     def _dialogue_choice(self) -> bool:
-        if self.pixel_sampler.get(*self.config.LOADING_PIXEL) == WHITE:
+        if self.pixel_sampler.colors_match(self.pixel_sampler.get(*self.config.LOADING_PIXEL), WHITE):
             return False
         x, low_y, hi_y = self.config.DIALOGUE_ICON
-        return (self.pixel_sampler.get(x, low_y) == WHITE) or (self.pixel_sampler.get(x, hi_y) == WHITE)
+        return (self.pixel_sampler.colors_match(self.pixel_sampler.get(x, low_y), WHITE)) or \
+               (self.pixel_sampler.colors_match(self.pixel_sampler.get(x, hi_y), WHITE))
 
     # --- hotkey input ---
     def on_key(self, key: KeyCode) -> None:

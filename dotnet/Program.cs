@@ -259,7 +259,7 @@ internal class AutoSkipper
         if (hwnd == IntPtr.Zero) return false;
         StringBuilder sb = new StringBuilder(256);
         Native.GetWindowText(hwnd, sb, 256);
-        return sb.ToString().Contains(_cfg.WINDOW_TITLE, StringComparison.OrdinalIgnoreCase);
+        return sb.ToString().Equals(_cfg.WINDOW_TITLE, StringComparison.OrdinalIgnoreCase);
     }
 
     public bool ColorsMatch(uint pixel, int r, int g, int b)

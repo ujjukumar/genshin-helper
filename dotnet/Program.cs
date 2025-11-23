@@ -74,18 +74,24 @@ internal static unsafe class Native
 // --- 2. Input Helper ---
 internal static class InputSender
 {
+    // Pool input array to avoid allocations on every key press
+    private static readonly Native.Input[] _inputPool = new Native.Input[2];
+    private static readonly object _inputLock = new();
+    
     public static void PressKey(ushort vkCode)
     {
-        var inputs = new Native.Input[2];
-        inputs[0].type = Native.INPUT_KEYBOARD;
-        inputs[0].u.ki.wVk = vkCode;
-        inputs[0].u.ki.dwFlags = 0; // Down
+        lock (_inputLock)
+        {
+            _inputPool[0].type = Native.INPUT_KEYBOARD;
+            _inputPool[0].u.ki.wVk = vkCode;
+            _inputPool[0].u.ki.dwFlags = 0; // Down
 
-        inputs[1].type = Native.INPUT_KEYBOARD;
-        inputs[1].u.ki.wVk = vkCode;
-        inputs[1].u.ki.dwFlags = Native.KEYEVENTF_KEYUP; // Up
+            _inputPool[1].type = Native.INPUT_KEYBOARD;
+            _inputPool[1].u.ki.wVk = vkCode;
+            _inputPool[1].u.ki.dwFlags = Native.KEYEVENTF_KEYUP; // Up
 
-        Native.SendInput(2, inputs, Marshal.SizeOf<Native.Input>());
+            Native.SendInput(2, _inputPool, Marshal.SizeOf<Native.Input>());
+        }
     }
     
     public static void TapT() => PressKey(0x54); // T
@@ -186,10 +192,14 @@ internal class AutoSkipper
     private CancellationTokenSource _spamCancel = new();
     private readonly object _spamLock = new();
     private readonly ManualResetEventSlim _wakeEvent = new(false);
+    
+    // Cached StringBuilder to avoid allocations on window title checks
+    private readonly StringBuilder _windowTitleBuffer = new(256);
 
     // Logging
     private static readonly object _logLock = new();
     private static bool _fileLogging = false;
+    private static bool _verbose = false;
     private static StreamWriter? _logWriter;
 
     // State
@@ -227,6 +237,17 @@ internal class AutoSkipper
         }
     }
 
+    public static void LogDebug(Func<string> msgFactory)
+    {
+        if (_verbose) Log($"[DEBUG] {msgFactory()}");
+    }
+
+    public static void SetVerbose(bool verbose)
+    {
+        _verbose = verbose;
+        if (verbose) Log("Verbose mode enabled");
+    }
+
     public void ToggleFileLogging()
     {
         lock (_logLock)
@@ -257,9 +278,12 @@ internal class AutoSkipper
     {
         IntPtr hwnd = Native.GetForegroundWindow();
         if (hwnd == IntPtr.Zero) return false;
-        StringBuilder sb = new StringBuilder(256);
-        Native.GetWindowText(hwnd, sb, 256);
-        return sb.ToString().Equals(_cfg.WINDOW_TITLE, StringComparison.OrdinalIgnoreCase);
+        _windowTitleBuffer.Clear();
+        Native.GetWindowText(hwnd, _windowTitleBuffer, 256);
+        string windowTitle = _windowTitleBuffer.ToString();
+        bool isActive = windowTitle.Equals(_cfg.WINDOW_TITLE, StringComparison.OrdinalIgnoreCase);
+        LogDebug(() => $"Window: '{windowTitle}' -> {isActive}");
+        return isActive;
     }
 
     public bool ColorsMatch(uint pixel, int r, int g, int b)
@@ -363,6 +387,8 @@ internal class AutoSkipper
             {
                 uint pPlaying = Native.GetPixel(_hdc, _cfg.PLAYING_ICON.x, _cfg.PLAYING_ICON.y);
                 bool isPlaying = ColorsMatch(pPlaying, 236, 229, 216);
+
+                LogDebug(() => $"Playing pixel: RGB({(pPlaying & 0xFF)},{((pPlaying >> 8) & 0xFF)},{((pPlaying >> 16) & 0xFF)}) @ ({_cfg.PLAYING_ICON.x},{_cfg.PLAYING_ICON.y}) -> {isPlaying}");
                 
                 bool isChoice = false;
                 if (!isPlaying)
@@ -373,6 +399,8 @@ internal class AutoSkipper
                         uint pLow = Native.GetPixel(_hdc, _cfg.DIALOGUE_ICON.x, _cfg.DIALOGUE_ICON.ly);
                         uint pHigh = Native.GetPixel(_hdc, _cfg.DIALOGUE_ICON.x, _cfg.DIALOGUE_ICON.hy);
                         isChoice = ColorsMatch(pLow, 255, 255, 255) || ColorsMatch(pHigh, 255, 255, 255);
+
+                        LogDebug(() => $"Choice pixels: Low=RGB({(pLow & 0xFF)},{((pLow >> 8) & 0xFF)},{((pLow >> 16) & 0xFF)}), High=RGB({(pHigh & 0xFF)},{((pHigh >> 8) & 0xFF)},{((pHigh >> 16) & 0xFF)}) -> {isChoice}");
                     }
                 }
 
@@ -443,13 +471,17 @@ internal class AutoSkipper
     private void PerformPress(double now)
     {
         bool useSpace = _rnd.NextDouble() < (_burstMode ? 0.1 : 0.1);
+        string key = useSpace ? "Space" : "F";
         if (useSpace) InputSender.TapSpace(); else InputSender.TapF();
+        LogDebug(() => $"Press: {key}");
         
         if (!useSpace && _doubleNext)
         {
             _doubleNext = false;
             InputSender.TapF();
             _postBurstPauseUntil = now + 0.4 + _rnd.NextDouble() * 0.6;
+
+            LogDebug(() => "Press: F (double)");
         }
 
         if (_burstMode)
@@ -575,14 +607,23 @@ internal class Program
 {
     static void Main(string[] args)
     {
-        if (args.Length > 0 && args[0] == "--benchmark")
+        // Parse command line arguments
+        bool verbose = false;
+        foreach (var arg in args)
         {
-            RunBenchmark();
-            return;
+            if (arg == "--benchmark")
+            {
+                RunBenchmark();
+                return;
+            }
+            if (arg == "-v" || arg == "--verbose")
+            {
+                verbose = true;
+            }
         }
-
         Console.Title = "Genshin AutoSkip (.NET 10 Native)";
         var config = ScreenConfig.Load();
+        AutoSkipper.SetVerbose(verbose);
         var skipper = new AutoSkipper(config);
         
         using var hooks = new GlobalHooks(skipper);

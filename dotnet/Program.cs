@@ -5,35 +5,39 @@ using System.Text;
 namespace AutoSkipper;
 
 // --- 1. Low Level Native Interop (Win32 API) ---
-internal static unsafe class Native
+internal static unsafe partial class Native
 {
-    [DllImport("user32.dll")] public static extern int GetSystemMetrics(int nIndex);
-    [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
-    [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern int GetWindowText(IntPtr hWnd, StringBuilder lpString, int nMaxCount);
-    [DllImport("user32.dll")] public static extern IntPtr GetDC(IntPtr hWnd);
-    [DllImport("user32.dll")] public static extern int ReleaseDC(IntPtr hWnd, IntPtr hDC);
-    [DllImport("gdi32.dll")] public static extern uint GetPixel(IntPtr hdc, int nXPos, int nYPos);
-    [DllImport("user32.dll")] public static extern void PostQuitMessage(int nExitCode);
+    [LibraryImport("user32.dll")] public static partial int GetSystemMetrics(int nIndex);
+    [LibraryImport("user32.dll")] public static partial IntPtr GetForegroundWindow();
+    [LibraryImport("user32.dll", EntryPoint = "GetWindowTextW", StringMarshalling = StringMarshalling.Utf16)]
+    public static partial int GetWindowText(IntPtr hWnd, Span<char> lpString, int nMaxCount);
+    [LibraryImport("user32.dll")] public static partial IntPtr GetDC(IntPtr hWnd);
+    [LibraryImport("user32.dll")] public static partial int ReleaseDC(IntPtr hWnd, IntPtr hDC);
+    [LibraryImport("gdi32.dll")] public static partial uint GetPixel(IntPtr hdc, int nXPos, int nYPos);
+    [LibraryImport("user32.dll")] public static partial void PostQuitMessage(int nExitCode);
     
     // Hooks
     public delegate IntPtr HookProc(int nCode, IntPtr wParam, IntPtr lParam);
-    [DllImport("user32.dll", CharSet = CharSet.Auto, SetLastError = true)]
-    public static extern IntPtr SetWindowsHookEx(int idHook, HookProc lpfn, IntPtr hMod, uint dwThreadId);
-    [DllImport("user32.dll", CharSet = CharSet.Auto, SetLastError = true)]
+    [LibraryImport("user32.dll", EntryPoint = "SetWindowsHookExW", SetLastError = true)]
+    public static partial IntPtr SetWindowsHookEx(int idHook, HookProc lpfn, IntPtr hMod, uint dwThreadId);
+    [LibraryImport("user32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
-    public static extern bool UnhookWindowsHookEx(IntPtr hhk);
-    [DllImport("user32.dll", CharSet = CharSet.Auto, SetLastError = true)]
-    public static extern IntPtr CallNextHookEx(IntPtr hhk, int nCode, IntPtr wParam, IntPtr lParam);
-    [DllImport("kernel32.dll", CharSet = CharSet.Auto, SetLastError = true)]
-    public static extern IntPtr GetModuleHandle(string? lpModuleName);
+    public static partial bool UnhookWindowsHookEx(IntPtr hhk);
+    [LibraryImport("user32.dll", SetLastError = true)]
+    public static partial IntPtr CallNextHookEx(IntPtr hhk, int nCode, IntPtr wParam, IntPtr lParam);
+    [LibraryImport("kernel32.dll", EntryPoint = "GetModuleHandleW", SetLastError = true, StringMarshalling = StringMarshalling.Utf16)]
+    public static partial IntPtr GetModuleHandle(string? lpModuleName);
 
     // Message Loop
-    [DllImport("user32.dll")] public static extern int GetMessage(out MSG lpMsg, IntPtr hWnd, uint wMsgFilterMin, uint wMsgFilterMax);
-    [DllImport("user32.dll")] public static extern bool TranslateMessage([In] ref MSG lpMsg);
-    [DllImport("user32.dll")] public static extern IntPtr DispatchMessage([In] ref MSG lpMsg);
+    [LibraryImport("user32.dll", EntryPoint = "GetMessageW")] public static partial int GetMessage(out MSG lpMsg, IntPtr hWnd, uint wMsgFilterMin, uint wMsgFilterMax);
+    [LibraryImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static partial bool TranslateMessage(in MSG lpMsg);
+    [LibraryImport("user32.dll", EntryPoint = "DispatchMessageW")]
+    public static partial IntPtr DispatchMessage(in MSG lpMsg);
 
     // Input
-    [DllImport("user32.dll")] public static extern uint SendInput(uint nInputs, Input[] pInputs, int cbSize);
+    [LibraryImport("user32.dll")] public static partial uint SendInput(uint nInputs, [In] Input[] pInputs, int cbSize);
 
     public const int WH_KEYBOARD_LL = 13;
     public const int WH_MOUSE_LL = 14;
@@ -76,11 +80,11 @@ internal static class InputSender
 {
     // Pool input array to avoid allocations on every key press
     private static readonly Native.Input[] _inputPool = new Native.Input[2];
-    private static readonly object _inputLock = new();
+    private static readonly System.Threading.Lock _inputLock = new();
     
     public static void PressKey(ushort vkCode)
     {
-        lock (_inputLock)
+        using (_inputLock.EnterScope())
         {
             _inputPool[0].type = Native.INPUT_KEYBOARD;
             _inputPool[0].u.ki.wVk = vkCode;
@@ -121,8 +125,8 @@ internal class ScreenConfig
         {
             foreach(var line in File.ReadAllLines(".env"))
             {
-                if (line.StartsWith("WIDTH=")) envW = line.Substring(6).Trim();
-                if (line.StartsWith("HEIGHT=")) envH = line.Substring(7).Trim();
+                if (line.StartsWith("WIDTH=")) envW = line[6..].Trim();
+                if (line.StartsWith("HEIGHT=")) envH = line[7..].Trim();
             }
         }
 
@@ -135,7 +139,7 @@ internal class ScreenConfig
             Console.WriteLine($"Detected Resolution: {w}x{h}");
             Console.Write("Is this correct? (y/n): ");
             var k = Console.ReadLine();
-            if (k?.ToLower().StartsWith("n") == true)
+            if (k?.StartsWith("n", StringComparison.OrdinalIgnoreCase) == true)
             {
                 w = GetInteger("Enter Width: ", 1920);
                 h = GetInteger("Enter Height: ", 1080);
@@ -200,22 +204,20 @@ internal class ScreenConfig
 }
 
 // --- 4. Logic & State Machine ---
-internal class AutoSkipper
+internal class AutoSkipper(ScreenConfig cfg)
 {
-    private readonly ScreenConfig _cfg;
+    private readonly ScreenConfig _cfg = cfg;
     private readonly Random _rnd = new();
     private bool _running = false;
     public bool ShouldExit = false;
-    private readonly IntPtr _hdc;
+    private readonly IntPtr _hdc = Native.GetDC(IntPtr.Zero);
     private CancellationTokenSource _spamCancel = new();
-    private readonly object _spamLock = new();
+    private readonly System.Threading.Lock _spamLock = new();
     private readonly ManualResetEventSlim _wakeEvent = new(false);
     
-    // Cached StringBuilder to avoid allocations on window title checks
-    private readonly StringBuilder _windowTitleBuffer = new(256);
 
     // Logging
-    private static readonly object _logLock = new();
+    private static readonly System.Threading.Lock _logLock = new();
     private static bool _fileLogging = false;
     private static bool _verbose = false;
     private static StreamWriter? _logWriter;
@@ -244,10 +246,7 @@ internal class AutoSkipper
             {
                 try
                 {
-                    if (_logWriter == null)
-                    {
-                        _logWriter = new StreamWriter("autoskip_dialogue.log", true, Encoding.UTF8) { AutoFlush = true };
-                    }
+                    _logWriter ??= new StreamWriter("autoskip_dialogue.log", true, Encoding.UTF8) { AutoFlush = true };
                     _logWriter.WriteLine(line);
                 }
                 catch { }
@@ -266,7 +265,7 @@ internal class AutoSkipper
         if (verbose) Log("Verbose mode enabled");
     }
 
-    public void ToggleFileLogging()
+    public static void ToggleFileLogging()
     {
         lock (_logLock)
         {
@@ -284,27 +283,21 @@ internal class AutoSkipper
         }
     }
 
-    public AutoSkipper(ScreenConfig cfg)
-    {
-        _cfg = cfg;
-        _hdc = Native.GetDC(IntPtr.Zero);
-    }
-
-    ~AutoSkipper() => Native.ReleaseDC(IntPtr.Zero, _hdc);
+    ~AutoSkipper() => _ = Native.ReleaseDC(IntPtr.Zero, _hdc);
 
     public bool IsGameActive()
     {
         IntPtr hwnd = Native.GetForegroundWindow();
         if (hwnd == IntPtr.Zero) return false;
-        _windowTitleBuffer.Clear();
-        Native.GetWindowText(hwnd, _windowTitleBuffer, 256);
-        string windowTitle = _windowTitleBuffer.ToString();
+        Span<char> buffer = stackalloc char[256];
+        int length = Native.GetWindowText(hwnd, buffer, buffer.Length);
+        string windowTitle = new(buffer[..length]);
         bool isActive = windowTitle.Equals(_cfg.WINDOW_TITLE, StringComparison.OrdinalIgnoreCase);
         LogDebug(() => $"Window: '{windowTitle}' -> {isActive}");
         return isActive;
     }
 
-    public bool ColorsMatch(uint pixel, int r, int g, int b)
+    public static bool ColorsMatch(uint pixel, int r, int g, int b)
     {
         int pr = (int)(pixel & 0xFF);
         int pg = (int)((pixel >> 8) & 0xFF);
@@ -312,7 +305,7 @@ internal class AutoSkipper
         return Math.Abs(pr - r) <= 10 && Math.Abs(pg - g) <= 10 && Math.Abs(pb - b) <= 10;
     }
 
-    private double GetTime() => Stopwatch.GetTimestamp() / (double)Stopwatch.Frequency;
+    private static double GetTime() => Stopwatch.GetTimestamp() / (double)Stopwatch.Frequency;
 
     private double NextKeyInterval()
     {
@@ -546,7 +539,7 @@ internal class AutoSkipper
         lock (_spamLock)
         {
             _spamCancel.Cancel();
-            _spamCancel = new CancellationTokenSource();
+            _spamCancel = new();
             var token = _spamCancel.Token;
             
             Task.Run(() => 
@@ -567,11 +560,11 @@ internal class AutoSkipper
 // --- 5. Global Hooks ---
 internal class GlobalHooks : IDisposable
 {
-    private Native.HookProc _kbdProc;
-    private Native.HookProc _mouseProc;
-    private IntPtr _hKbdHook = IntPtr.Zero;
-    private IntPtr _hMouseHook = IntPtr.Zero;
-    private AutoSkipper _skipper;
+    private readonly Native.HookProc _kbdProc;
+    private readonly Native.HookProc _mouseProc;
+    private readonly IntPtr _hKbdHook = IntPtr.Zero;
+    private readonly IntPtr _hMouseHook = IntPtr.Zero;
+    private readonly AutoSkipper _skipper;
 
     public GlobalHooks(AutoSkipper skipper)
     {
@@ -593,7 +586,7 @@ internal class GlobalHooks : IDisposable
         {
             int vkCode = Marshal.ReadInt32(lParam);
             // F7=118, F8=119, F9=120, F12=123
-            if (vkCode == 118) _skipper.ToggleFileLogging();
+            if (vkCode == 118) AutoSkipper.ToggleFileLogging();
             else if (vkCode == 119) _skipper.ToggleRun(true);
             else if (vkCode == 120) _skipper.ToggleRun(false);
             else if (vkCode == 123) { _skipper.ShouldExit = true; _skipper.Wake(); Native.PostQuitMessage(0); }
@@ -646,16 +639,17 @@ internal class Program
         
         using var hooks = new GlobalHooks(skipper);
 
-        Thread logicThread = new Thread(skipper.Run);
-        logicThread.IsBackground = true;
+        Thread logicThread = new(skipper.Run)
+        {
+            IsBackground = true
+        };
         logicThread.Start();
 
         // Standard Win32 Message Loop for Hooks
-        Native.MSG msg;
-        while (Native.GetMessage(out msg, IntPtr.Zero, 0, 0) > 0)
+        while (Native.GetMessage(out Native.MSG msg, IntPtr.Zero, 0, 0) > 0)
         {
-            Native.TranslateMessage(ref msg);
-            Native.DispatchMessage(ref msg);
+            Native.TranslateMessage(msg);
+            Native.DispatchMessage(msg);
         }
     }
 
@@ -668,11 +662,11 @@ internal class Program
         long start = Stopwatch.GetTimestamp();
         for (int i = 0; i < count; i++)
         {
-            Native.GetPixel(hdc, 100, 100);
+            _ = Native.GetPixel(hdc, 100, 100);
         }
         long end = Stopwatch.GetTimestamp();
 
-        Native.ReleaseDC(IntPtr.Zero, hdc);
+        _ = Native.ReleaseDC(IntPtr.Zero, hdc);
 
         double duration = (end - start) / (double)Stopwatch.Frequency;
         double ops = count / duration;

@@ -6,3 +6,5 @@
 dotnet/obj/
 dotnet/bin/
 /dotnet/.vs
+dotnet/Benchmarks/obj/
+dotnet/Benchmarks/bin/

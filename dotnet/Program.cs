@@ -214,13 +214,6 @@ internal class AutoSkipper(ScreenConfig cfg)
     private CancellationTokenSource _spamCancel = new();
     private readonly System.Threading.Lock _spamLock = new();
     private readonly ManualResetEventSlim _wakeEvent = new(false);
-    
-
-    // Logging
-    private static readonly System.Threading.Lock _logLock = new();
-    private static bool _fileLogging = false;
-    private static bool _verbose = false;
-    private static StreamWriter? _logWriter;
 
     // State
     private int _burstPool = 0;
@@ -235,54 +228,6 @@ internal class AutoSkipper(ScreenConfig cfg)
     private bool _inDialogue = false;
     private bool _windowActive = false;
 
-    public static void Log(string msg)
-    {
-        string line = $"{DateTime.Now:HH:mm:ss.fff} | {msg}";
-        Console.WriteLine(line);
-        
-        if (_fileLogging)
-        {
-            lock (_logLock)
-            {
-                try
-                {
-                    _logWriter ??= new StreamWriter("autoskip_dialogue.log", true, Encoding.UTF8) { AutoFlush = true };
-                    _logWriter.WriteLine(line);
-                }
-                catch { }
-            }
-        }
-    }
-
-    public static void LogDebug(Func<string> msgFactory)
-    {
-        if (_verbose) Log($"[DEBUG] {msgFactory()}");
-    }
-
-    public static void SetVerbose(bool verbose)
-    {
-        _verbose = verbose;
-        if (verbose) Log("Verbose mode enabled");
-    }
-
-    public static void ToggleFileLogging()
-    {
-        lock (_logLock)
-        {
-            _fileLogging = !_fileLogging;
-            if (!_fileLogging)
-            {
-                Log("File logging disabled");
-                _logWriter?.Dispose();
-                _logWriter = null;
-            }
-            else
-            {
-                Log("File logging enabled");
-            }
-        }
-    }
-
     ~AutoSkipper() => _ = Native.ReleaseDC(IntPtr.Zero, _hdc);
 
     public bool IsGameActive()
@@ -293,7 +238,7 @@ internal class AutoSkipper(ScreenConfig cfg)
         int length = Native.GetWindowText(hwnd, buffer, buffer.Length);
         string windowTitle = new(buffer[..length]);
         bool isActive = windowTitle.Equals(_cfg.WINDOW_TITLE, StringComparison.OrdinalIgnoreCase);
-        LogDebug(() => $"Window: '{windowTitle}' -> {isActive}");
+        Logger.LogDebug(() => $"Window: '{windowTitle}' -> {isActive}");
         return isActive;
     }
 
@@ -340,7 +285,7 @@ internal class AutoSkipper(ScreenConfig cfg)
 
     public void Run()
     {
-        Log("Instructions: F7=Log, F8=Start, F9=Pause, F12=Exit. Mouse4=T, Mouse5=Burst.");
+        Logger.Log("Instructions: F7=Log, F8=Start, F9=Pause, F12=Exit. Mouse4=T, Mouse5=Burst.");
         double lastPressTime = GetTime();
         double nextInterval = NextKeyInterval();
         double nextStateCheck = 0.0;
@@ -362,7 +307,7 @@ internal class AutoSkipper(ScreenConfig cfg)
             if (isActive != _windowActive)
             {
                 _windowActive = isActive;
-                Log(isActive ? "Window State: ACTIVE" : "Window State: INACTIVE");
+                Logger.Log(isActive ? "Window State: ACTIVE" : "Window State: INACTIVE");
             }
 
             if (!isActive)
@@ -386,7 +331,7 @@ internal class AutoSkipper(ScreenConfig cfg)
                 if (br != null)
                 {
                     double dur = BreakDuration(br);
-                    Log($"Break: {br} {dur:F1}s");
+                    Logger.Log($"Break: {br} {dur:F1}s");
                     _breakUntil = now + dur;
                     nextInterval = NextKeyInterval();
                     continue;
@@ -399,7 +344,7 @@ internal class AutoSkipper(ScreenConfig cfg)
                 uint pPlaying = Native.GetPixel(_hdc, _cfg.PLAYING_ICON.x, _cfg.PLAYING_ICON.y);
                 bool isPlaying = ColorsMatch(pPlaying, 236, 229, 216);
 
-                LogDebug(() => $"Playing pixel: RGB({(pPlaying & 0xFF)},{((pPlaying >> 8) & 0xFF)},{((pPlaying >> 16) & 0xFF)}) @ ({_cfg.PLAYING_ICON.x},{_cfg.PLAYING_ICON.y}) -> {isPlaying}");
+                Logger.LogDebug(() => $"Playing pixel: RGB({(pPlaying & 0xFF)},{((pPlaying >> 8) & 0xFF)},{((pPlaying >> 16) & 0xFF)}) @ ({_cfg.PLAYING_ICON.x},{_cfg.PLAYING_ICON.y}) -> {isPlaying}");
                 
                 bool isChoice = false;
                 if (!isPlaying)
@@ -411,7 +356,7 @@ internal class AutoSkipper(ScreenConfig cfg)
                         uint pHigh = Native.GetPixel(_hdc, _cfg.DIALOGUE_ICON.x, _cfg.DIALOGUE_ICON.hy);
                         isChoice = ColorsMatch(pLow, 255, 255, 255) || ColorsMatch(pHigh, 255, 255, 255);
 
-                        LogDebug(() => $"Choice pixels: Low=RGB({(pLow & 0xFF)},{((pLow >> 8) & 0xFF)},{((pLow >> 16) & 0xFF)}), High=RGB({(pHigh & 0xFF)},{((pHigh >> 8) & 0xFF)},{((pHigh >> 16) & 0xFF)}) -> {isChoice}");
+                        Logger.LogDebug(() => $"Choice pixels: Low=RGB({(pLow & 0xFF)},{((pLow >> 8) & 0xFF)},{((pLow >> 16) & 0xFF)}), High=RGB({(pHigh & 0xFF)},{((pHigh >> 8) & 0xFF)},{((pHigh >> 16) & 0xFF)}) -> {isChoice}");
                     }
                 }
 
@@ -419,7 +364,7 @@ internal class AutoSkipper(ScreenConfig cfg)
                 if (isDialogue != _inDialogue)
                 {
                     _inDialogue = isDialogue;
-                    Log(isDialogue ? "Dialogue State: DETECTED" : "Dialogue State: ENDED");
+                    Logger.Log(isDialogue ? "Dialogue State: DETECTED" : "Dialogue State: ENDED");
                 }
 
                 nextStateCheck = now + 0.15;
@@ -451,7 +396,7 @@ internal class AutoSkipper(ScreenConfig cfg)
                 {
                     _burstMode = true;
                     _burstRemaining = _rnd.Next(3, 6);
-                    Log($"Burst mode: {_burstRemaining}");
+                    Logger.Log($"Burst mode: {_burstRemaining}");
                 }
 
                 if (_skipNext)
@@ -476,7 +421,7 @@ internal class AutoSkipper(ScreenConfig cfg)
 
             SleepUntil(Math.Min(wakeTarget, now + 0.35));
         }
-        Log("Closing Logic Loop");
+        Logger.Log("Closing Logic Loop");
     }
 
     private void PerformPress(double now)
@@ -484,7 +429,7 @@ internal class AutoSkipper(ScreenConfig cfg)
         bool useSpace = _rnd.NextDouble() < (_burstMode ? 0.1 : 0.1);
         string key = useSpace ? "Space" : "F";
         if (useSpace) InputSender.TapSpace(); else InputSender.TapF();
-        LogDebug(() => $"Press: {key}");
+        Logger.LogDebug(() => $"Press: {key}");
         
         if (!useSpace && _doubleNext)
         {
@@ -492,7 +437,7 @@ internal class AutoSkipper(ScreenConfig cfg)
             InputSender.TapF();
             _postBurstPauseUntil = now + 0.4 + _rnd.NextDouble() * 0.6;
 
-            LogDebug(() => "Press: F (double)");
+            Logger.LogDebug(() => "Press: F (double)");
         }
 
         if (_burstMode)
@@ -524,13 +469,13 @@ internal class AutoSkipper(ScreenConfig cfg)
     public void ToggleRun(bool on) 
     { 
         _running = on; 
-        Log(on ? "RUN" : "PAUSE"); 
+        Logger.Log(on ? "RUN" : "PAUSE"); 
         Wake(); 
     }
     
     public void HandleMouse4()
     {
-        if (IsGameActive()) { InputSender.TapT(); Log("Remap: T"); }
+        if (IsGameActive()) { InputSender.TapT(); Logger.Log("Remap: T"); }
     }
 
     public void HandleMouse5()
@@ -544,14 +489,14 @@ internal class AutoSkipper(ScreenConfig cfg)
             
             Task.Run(() => 
             {
-                Log("Burst Start");
+                Logger.Log("Burst Start");
                 long end = Stopwatch.GetTimestamp() + (long)(4.0 * Stopwatch.Frequency);
                 while (Stopwatch.GetTimestamp() < end && !token.IsCancellationRequested)
                 {
                     if(IsGameActive()) InputSender.TapF();
                     Thread.Sleep(100 + _rnd.Next(0, 80));
                 }
-                Log("Burst End");
+                Logger.Log("Burst End");
             });
         }
     }
@@ -586,7 +531,7 @@ internal class GlobalHooks : IDisposable
         {
             int vkCode = Marshal.ReadInt32(lParam);
             // F7=118, F8=119, F9=120, F12=123
-            if (vkCode == 118) AutoSkipper.ToggleFileLogging();
+            if (vkCode == 118) Logger.ToggleFileLogging();
             else if (vkCode == 119) _skipper.ToggleRun(true);
             else if (vkCode == 120) _skipper.ToggleRun(false);
             else if (vkCode == 123) { _skipper.ShouldExit = true; _skipper.Wake(); Native.PostQuitMessage(0); }
@@ -634,7 +579,7 @@ internal class Program
         }
         Console.Title = "Genshin AutoSkip (.NET 10 Native)";
         var config = ScreenConfig.Load();
-        AutoSkipper.SetVerbose(verbose);
+        Logger.SetVerbose(verbose);
         var skipper = new AutoSkipper(config);
         
         using var hooks = new GlobalHooks(skipper);
@@ -651,6 +596,7 @@ internal class Program
             Native.TranslateMessage(msg);
             Native.DispatchMessage(msg);
         }
+        Logger.Shutdown();
     }
 
     static void RunBenchmark()

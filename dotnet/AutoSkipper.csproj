@@ -19,6 +19,21 @@
     <OptimizationPreference>Size</OptimizationPreference>
     <IlcOptimizationPreference>Size</IlcOptimizationPreference>
     <IlcGenerateStackTraceData>false</IlcGenerateStackTraceData>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
   </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="BenchmarkDotNet" Version="0.15.6" />
+  </ItemGroup>
+
+	<ItemGroup>
+		<InternalsVisibleTo Include="AutoSkipper.Benchmarks" />
+	</ItemGroup>
+
+  <ItemGroup>
+    <Compile Remove="Benchmarks\**" />
+    <EmbeddedResource Remove="Benchmarks\**" />
+    <None Remove="Benchmarks\**" />
+  </ItemGroup>
 
 </Project>

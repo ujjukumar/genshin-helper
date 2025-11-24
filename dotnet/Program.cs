@@ -80,11 +80,11 @@ internal static class InputSender
 {
     // Pool input array to avoid allocations on every key press
     private static readonly Native.Input[] _inputPool = new Native.Input[2];
-    private static readonly System.Threading.Lock _inputLock = new();
+    private static readonly object _inputLock = new();
     
     public static void PressKey(ushort vkCode)
     {
-        using (_inputLock.EnterScope())
+        lock (_inputLock)
         {
             _inputPool[0].type = Native.INPUT_KEYBOARD;
             _inputPool[0].u.ki.wVk = vkCode;
@@ -212,7 +212,7 @@ internal class AutoSkipper(ScreenConfig cfg)
     public bool ShouldExit = false;
     private readonly IntPtr _hdc = Native.GetDC(IntPtr.Zero);
     private CancellationTokenSource _spamCancel = new();
-    private readonly System.Threading.Lock _spamLock = new();
+    private readonly object _spamLock = new();
     private readonly ManualResetEventSlim _wakeEvent = new(false);
 
     // State

@@ -16,7 +16,7 @@ public static class Logger
     private static bool _verbose = false;
     private static bool _fileLogging = false;
     private static StreamWriter? _logWriter;
-    private static readonly Lock _fileLock = new(); // Lock for toggling file logging
+    private static readonly object _fileLock = new(); // Lock for toggling file logging
 
     /// <summary>
     /// Static constructor to initialize the logger and start the background consumer task.

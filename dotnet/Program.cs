@@ -137,13 +137,31 @@ internal class ScreenConfig
             var k = Console.ReadLine();
             if (k?.ToLower().StartsWith("n") == true)
             {
-                Console.Write("Enter Width: "); w = int.Parse(Console.ReadLine() ?? "1920");
-                Console.Write("Enter Height: "); h = int.Parse(Console.ReadLine() ?? "1080");
+                w = GetInteger("Enter Width: ", 1920);
+                h = GetInteger("Enter Height: ", 1080);
                 File.WriteAllText(".env", $"WIDTH={w}\nHEIGHT={h}\n");
             }
         }
 
         return new ScreenConfig(w, h);
+    }
+
+    private static int GetInteger(string prompt, int defaultValue)
+    {
+        while (true)
+        {
+            Console.Write(prompt);
+            string? input = Console.ReadLine();
+            if (string.IsNullOrWhiteSpace(input))
+            {
+                return defaultValue;
+            }
+            if (int.TryParse(input, out int value))
+            {
+                return value;
+            }
+            Console.WriteLine("Invalid input, please enter a number.");
+        }
     }
 
     public ScreenConfig(int w, int h)

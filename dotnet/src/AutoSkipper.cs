@@ -5,10 +5,16 @@ using System.Threading.Tasks;
 
 namespace AutoSkipper;
 
+internal enum BreakType
+{
+    None,
+    Short,
+    Long
+}
+
 internal class AutoSkipper : IDisposable
 {
     private readonly ScreenConfig _cfg;
-    private readonly Random _rnd = new();
     private bool _running = false;
     public bool ShouldExit = false;
     private readonly IntPtr _hdc;
@@ -28,12 +34,18 @@ internal class AutoSkipper : IDisposable
     private const double BreakInterval = 30.0;
     private bool _inDialogue = false;
     private bool _windowActive = false;
-    private string _lastWindowTitle = string.Empty;
+    private static ReadOnlySpan<char> GenshinWindowTitle => "Genshin Impact".AsSpan();
+
 
     public AutoSkipper(ScreenConfig cfg)
     {
         _cfg = cfg;
         _hdc = Native.GetDC(IntPtr.Zero);
+    }
+
+    ~AutoSkipper()
+    {
+        Native.ReleaseDC(IntPtr.Zero, _hdc);
     }
 
     public void Dispose()
@@ -46,26 +58,20 @@ internal class AutoSkipper : IDisposable
     {
         IntPtr hwnd = Native.GetForegroundWindow();
         if (hwnd == IntPtr.Zero) return false;
+
         Span<char> buffer = stackalloc char[256];
         int length = Native.GetWindowText(hwnd, buffer, buffer.Length);
-        string windowTitle = new(buffer[..length]);
-        
-        if (windowTitle != _lastWindowTitle)
-        {
-            Logger.LogDebug(() => $"Window: '{windowTitle}'");
-            _lastWindowTitle = windowTitle;
-        }
+        var windowTitleSpan = buffer[..length];
 
-        bool isActive = windowTitle.Equals(_cfg.WINDOW_TITLE, StringComparison.OrdinalIgnoreCase);
+        bool isActive = windowTitleSpan.Equals(GenshinWindowTitle, StringComparison.OrdinalIgnoreCase);
+
         if (!isActive)
         {
-             var processes = Process.GetProcessesByName("GenshinImpact");
-             if(processes.Length == 0)
-             {
-                Logger.Log("Genshin Impact process not found.");
-                return false;
-             }
+            // The expensive Process.GetProcessesByName call has been removed.
+            // We now only rely on the window title check.
+            // If the process not running, the window won't be in the foreground anyway.
         }
+        
         return isActive;
     }
 
@@ -84,31 +90,31 @@ internal class AutoSkipper : IDisposable
         if (_burstPool > 0)
         {
             _burstPool--;
-            return 0.05 + _rnd.NextDouble() * 0.04;
+            return 0.05 + Random.Shared.NextDouble() * 0.04;
         }
-        if (_rnd.NextDouble() < 1.0/50.0)
+        if (Random.Shared.NextDouble() < 1.0/50.0)
         {
-            _burstPool = _rnd.Next(2, 6);
-            return 0.05 + _rnd.NextDouble() * 0.04;
+            _burstPool = Random.Shared.Next(2, 6);
+            return 0.05 + Random.Shared.NextDouble() * 0.04;
         }
-        if (_rnd.NextDouble() < 1.0/8.0)
+        if (Random.Shared.NextDouble() < 1.0/8.0)
         {
-            return 0.09 + _rnd.NextDouble() * 0.16;
+            return 0.09 + Random.Shared.NextDouble() * 0.16;
         }
-        return 0.11 + _rnd.NextDouble() * 0.10;
+        return 0.11 + Random.Shared.NextDouble() * 0.10;
     }
 
-    private string? MaybeBreak()
+    private BreakType MaybeBreak()
     {
-        double r = _rnd.NextDouble();
-        if (r < 1.0/100.0) return "long";
-        if (r < 1.0/100.0 + 1.0/25.0) return "short";
-        return null;
+        double r = Random.Shared.NextDouble();
+        if (r < 1.0 / 100.0) return BreakType.Long;
+        if (r < 1.0 / 100.0 + 1.0 / 25.0) return BreakType.Short;
+        return BreakType.None;
     }
 
-    private double BreakDuration(string kind) => kind == "long" 
-        ? 4.0 + _rnd.NextDouble() * 6.0 
-        : 2.0 + _rnd.NextDouble() * 4.0;
+    private double BreakDuration(BreakType kind) => kind == BreakType.Long
+        ? 4.0 + Random.Shared.NextDouble() * 6.0
+        : 2.0 + Random.Shared.NextDouble() * 4.0;
 
     public void Run()
     {
@@ -156,8 +162,8 @@ internal class AutoSkipper : IDisposable
                 if (now - _lastBreakCheck > BreakInterval)
                 {
                     _lastBreakCheck = now;
-                    string? br = MaybeBreak();
-                    if (br != null)
+                    BreakType br = MaybeBreak();
+                    if (br != BreakType.None)
                     {
                         double dur = BreakDuration(br);
                         Logger.Log($"Break: {br} {dur:F1}s");
@@ -215,16 +221,16 @@ internal class AutoSkipper : IDisposable
                 bool actionDue = (now - lastPressTime) >= nextInterval || _burstMode;
                 if (actionDue)
                 {
-                    double r1 = _rnd.NextDouble();
-                    double r2 = _rnd.NextDouble();
-                    double r3 = _rnd.NextDouble();
+                    double r1 = Random.Shared.NextDouble();
+                    double r2 = Random.Shared.NextDouble();
+                    double r3 = Random.Shared.NextDouble();
 
                     if (!_skipNext && r1 < 1.0/40.0) _skipNext = true;
                     if (!_doubleNext && r2 < 1.0/35.0) _doubleNext = true;
                     if (!_burstMode && r3 < 1.0/60.0)
                     {
                         _burstMode = true;
-                        _burstRemaining = _rnd.Next(3, 6);
+                        _burstRemaining = Random.Shared.Next(3, 6);
                         Logger.Log($"Burst mode: {_burstRemaining}");
                     }
 
@@ -264,7 +270,7 @@ internal class AutoSkipper : IDisposable
     
     private void PerformPress(double now)
     {
-        bool useSpace = _rnd.NextDouble() < (_burstMode ? 0.1 : 0.1);
+        bool useSpace = Random.Shared.NextDouble() < (_burstMode ? 0.1 : 0.1);
         string key = useSpace ? "Space" : "F";
         if (useSpace) InputSender.TapSpace(); else InputSender.TapF();
         Logger.LogDebug(() => $"Press: {key}");
@@ -273,7 +279,7 @@ internal class AutoSkipper : IDisposable
         {
             _doubleNext = false;
             InputSender.TapF();
-            _postBurstPauseUntil = now + 0.4 + _rnd.NextDouble() * 0.6;
+            _postBurstPauseUntil = now + 0.4 + Random.Shared.NextDouble() * 0.6;
 
             Logger.LogDebug(() => "Press: F (double)");
         }
@@ -284,7 +290,7 @@ internal class AutoSkipper : IDisposable
             if (_burstRemaining <= 0)
             {
                 _burstMode = false;
-                _postBurstPauseUntil = now + 0.4 + _rnd.NextDouble() * 0.6;
+                _postBurstPauseUntil = now + 0.4 + Random.Shared.NextDouble() * 0.6;
             }
         }
     }
@@ -325,17 +331,22 @@ internal class AutoSkipper : IDisposable
             _spamCancel = new();
             var token = _spamCancel.Token;
             
-            Task.Run(() => 
+            Task.Run(async () =>
             {
                 Logger.Log("Burst Start");
-                long end = Stopwatch.GetTimestamp() + (long)(4.0 * Stopwatch.Frequency);
-                while (Stopwatch.GetTimestamp() < end && !token.IsCancellationRequested)
+                var cts = new CancellationTokenSource(TimeSpan.FromSeconds(4));
+                using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(token, cts.Token);
+                while (!linkedCts.IsCancellationRequested)
                 {
-                    if(IsGameActive()) InputSender.TapF();
-                    Thread.Sleep(100 + _rnd.Next(0, 80));
+                    if (IsGameActive()) InputSender.TapF();
+                    try
+                    {
+                        await Task.Delay(100 + Random.Shared.Next(0, 80), linkedCts.Token);
+                    }
+                    catch (TaskCanceledException) { break; }
                 }
                 Logger.Log("Burst End");
-            });
+            }, token);
         }
     }
 }

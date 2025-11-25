@@ -1,57 +1,61 @@
 using System;
 using System.IO;
 using System.Text.Json;
+using System.Threading.Tasks;
 
 namespace AutoSkipper;
 
 // --- 3. Configuration ---
 internal class ScreenConfig
 {
-    public int WIDTH { get; private set; }
-    public int HEIGHT { get; private set; }
-    public (int x, int y) PLAYING_ICON;
-    public (int x, int ly, int hy) DIALOGUE_ICON;
-    public (int x, int y) LOADING_PIXEL;
-    public string WINDOW_TITLE;
+    public int WIDTH { get; }
+    public int HEIGHT { get; }
+    public (int x, int y) PLAYING_ICON { get; }
+    public (int x, int ly, int hy) DIALOGUE_ICON { get; }
+    public (int x, int y) LOADING_PIXEL { get; }
+    public string WINDOW_TITLE { get; }
 
-    private static ConfigData _configData = new();
+    private readonly ConfigData _configData;
 
-    public static ScreenConfig Load()
+    public static async Task<ScreenConfig> CreateAsync()
+    {
+        var configData = await LoadConfigAsync();
+        
+        int w = Native.GetSystemMetrics(0); // SM_CXSCREEN
+        int h = Native.GetSystemMetrics(1); // SM_CYSCREEN
+        
+        return new ScreenConfig(w, h, configData);
+    }
+    
+    private static async Task<ConfigData> LoadConfigAsync()
     {
         if (File.Exists("config.json"))
         {
             try
             {
-                var json = File.ReadAllText("config.json");
-                _configData = JsonSerializer.Deserialize(json, JsonContext.Default.ConfigData) ?? new ConfigData();
+                var json = await File.ReadAllTextAsync("config.json");
+                return JsonSerializer.Deserialize(json, JsonContext.Default.ConfigData) ?? new ConfigData();
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"Error loading config.json: {ex.Message}");
-                Console.WriteLine("Using default configuration.");
-                _configData = new ConfigData();
+                Logger.LogError($"Error loading config.json: {ex.Message}");
+                Logger.Log("Using default configuration.");
+                return new ConfigData();
             }
         }
         else
         {
-            Console.WriteLine("config.json not found. Creating with default values.");
-            var json = JsonSerializer.Serialize(new ConfigData(), JsonContext.Default.ConfigData);
-            File.WriteAllText("config.json", json);
-            _configData = new ConfigData();
+            Logger.Log("config.json not found. Creating with default values.");
+            var defaultConfig = new ConfigData();
+            var json = JsonSerializer.Serialize(defaultConfig, JsonContext.Default.ConfigData);
+            await File.WriteAllTextAsync("config.json", json);
+            return defaultConfig;
         }
-
-        int w = Native.GetSystemMetrics(0); // SM_CXSCREEN
-        int h = Native.GetSystemMetrics(1); // SM_CYSCREEN
-        
-        // The logic for asking for resolution can be kept if needed, or removed.
-        // For now, I will remove it to simplify the changes.
-        // The user can modify the .env file if needed, or we can add it to config.json
-        
-        return new ScreenConfig(w, h);
     }
-    
-    public ScreenConfig(int w, int h)
+
+    private ScreenConfig(int w, int h, ConfigData configData)
     {
+        _configData = configData;
         WIDTH = w; 
         HEIGHT = h;
         WINDOW_TITLE = _configData.WindowTitle;

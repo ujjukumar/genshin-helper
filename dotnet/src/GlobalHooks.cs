@@ -1,4 +1,5 @@
 using System;
+using System.ComponentModel;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
 
@@ -7,6 +8,11 @@ namespace AutoSkipper;
 // --- 5. Global Hooks ---
 internal class GlobalHooks : IDisposable
 {
+    private const int VK_F7 = 0x76;
+    private const int VK_F8 = 0x77;
+    private const int VK_F9 = 0x78;
+    private const int VK_F12 = 0x7B;
+    
     private readonly Native.HookProc _kbdProc;
     private readonly Native.HookProc _mouseProc;
     private readonly IntPtr _hKbdHook = IntPtr.Zero;
@@ -18,25 +24,42 @@ internal class GlobalHooks : IDisposable
         _skipper = skipper;
         _kbdProc = HookCallbackKbd;
         _mouseProc = HookCallbackMouse;
-        
-        using var curProcess = Process.GetCurrentProcess();
-        using var curModule = curProcess.MainModule;
-        IntPtr modHandle = Native.GetModuleHandle(curModule?.ModuleName);
+
+        IntPtr modHandle = Native.GetModuleHandle(null);
 
         _hKbdHook = Native.SetWindowsHookEx(Native.WH_KEYBOARD_LL, _kbdProc, modHandle, 0);
+        if (_hKbdHook == IntPtr.Zero)
+        {
+            throw new Win32Exception(Marshal.GetLastWin32Error(), "Failed to set keyboard hook.");
+        }
+        
         _hMouseHook = Native.SetWindowsHookEx(Native.WH_MOUSE_LL, _mouseProc, modHandle, 0);
+        if (_hMouseHook == IntPtr.Zero)
+        {
+            // Clean up the successfully installed hook before throwing
+            Native.UnhookWindowsHookEx(_hKbdHook);
+            throw new Win32Exception(Marshal.GetLastWin32Error(), "Failed to set mouse hook.");
+        }
     }
 
     private IntPtr HookCallbackKbd(int nCode, IntPtr wParam, IntPtr lParam)
     {
         if (nCode >= 0 && wParam == (IntPtr)Native.WM_KEYDOWN)
         {
-            int vkCode = Marshal.ReadInt32(lParam);
-            // F7=118, F8=119, F9=120, F12=123
-            if (vkCode == 118) Logger.ToggleFileLogging();
-            else if (vkCode == 119) _skipper.ToggleRun(true);
-            else if (vkCode == 120) _skipper.ToggleRun(false);
-            else if (vkCode == 123) { _skipper.ShouldExit = true; _skipper.Wake(); Native.PostQuitMessage(0); }
+            var hookStruct = Marshal.PtrToStructure<Native.KBDLLHOOKSTRUCT>(lParam);
+            int vkCode = (int)hookStruct.vkCode;
+            
+            switch (vkCode)
+            {
+                case VK_F7: Logger.ToggleFileLogging(); break;
+                case VK_F8: _skipper.ToggleRun(true); break;
+                case VK_F9: _skipper.ToggleRun(false); break;
+                case VK_F12:
+                    _skipper.ShouldExit = true;
+                    _skipper.Wake();
+                    Native.PostQuitMessage(0);
+                    break;
+            }
         }
         return Native.CallNextHookEx(_hKbdHook, nCode, wParam, lParam);
     }

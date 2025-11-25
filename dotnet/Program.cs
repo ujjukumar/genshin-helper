@@ -1,13 +1,14 @@
 using System;
 using System.Diagnostics;
 using System.Threading;
+using System.Threading.Tasks;
 
 namespace AutoSkipper;
 
 // --- 6. Entry Point ---
 internal class Program
 {
-    static void Main(string[] args)
+    static async Task Main(string[] args)
     {
         // Parse command line arguments
         bool verbose = false;
@@ -23,9 +24,11 @@ internal class Program
                 verbose = true;
             }
         }
-        // Console.Title = "Genshin AutoSkip";
-        var config = ScreenConfig.Load();
+        
         Logger.SetVerbose(verbose);
+        
+        var config = await ScreenConfig.CreateAsync();
+        
         using var skipper = new AutoSkipper(config);
         using var hooks = new GlobalHooks(skipper);
 
@@ -53,7 +56,7 @@ internal class Program
     {
         IntPtr hdc = Native.GetDC(IntPtr.Zero);
         int count = 100;
-        Console.WriteLine($"Benchmarking {count} GetPixel calls.");
+        Logger.Log($"Benchmarking {count} GetPixel calls.");
 
         long start = Stopwatch.GetTimestamp();
         for (int i = 0; i < count; i++)
@@ -67,7 +70,7 @@ internal class Program
         double duration = (end - start) / (double)Stopwatch.Frequency;
         double ops = count / duration;
 
-        Console.WriteLine($"Time: {duration:F4} seconds");
-        Console.WriteLine($"Speed: {ops:N0} ops/sec");
+        Logger.Log($"Time: {duration:F4} seconds");
+        Logger.Log($"Speed: {ops:N0} ops/sec");
     }
 }

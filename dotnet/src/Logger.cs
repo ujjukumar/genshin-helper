@@ -1,93 +1,78 @@
-using System.Collections.Concurrent;
-using System.Diagnostics;
-using System.Text;
-using System.Threading.Tasks;
 using System;
+using System.Collections.Concurrent;
 using System.IO;
+using System.Text;
+using System.Threading;
+using System.Threading.Tasks;
 
 namespace AutoSkipper;
 
-/// <summary>
-/// A high-performance, asynchronous logger designed to minimize impact on the main application thread.
-/// It uses a background thread to process and write log messages from a concurrent queue.
-/// </summary>
+// A high-performance, asynchronous logger designed to minimize impact on the main application thread.
+// It uses a background thread to process and write log messages from a concurrent queue.
 public static class Logger
 {
-    private static readonly BlockingCollection<string> _logQueue = new(new ConcurrentQueue<string>());
+    private enum LogLevel { Info, Debug, Error }
+
+    private readonly struct LogEntry
+    {
+        public readonly DateTime Timestamp;
+        public readonly LogLevel Level;
+        public readonly string Message;
+
+        public LogEntry(LogLevel level, string message)
+        {
+            Timestamp = DateTime.Now;
+            Level = level;
+            Message = message;
+        }
+    }
+
+    private static readonly BlockingCollection<LogEntry> _logQueue = new(new ConcurrentQueue<LogEntry>());
     private static readonly Task _consumerTask;
 
     private static bool _verbose = false;
-    private static bool _fileLogging = false;
-    private static StreamWriter? _logWriter;
-    private static readonly object _fileLock = new(); // Lock for toggling file logging
+    private static volatile StreamWriter? _logWriter; // Volatile for thread-safe reads
+    private static readonly object _fileLock = new(); // Lock for creating/disposing the writer
 
-    /// <summary>
-    /// Static constructor to initialize the logger and start the background consumer task.
-    /// </summary>
     static Logger()
     {
         _consumerTask = Task.Run(ProcessQueue);
     }
 
-    /// <summary>
-    /// The main processing loop for the logger. Runs on a background thread.
-    /// Dequeues messages and writes them to the console and/or a file.
-    /// </summary>
     private static void ProcessQueue()
     {
-        // This loop will run until the queue is marked as complete for adding.
-        foreach (string message in _logQueue.GetConsumingEnumerable())
+        foreach (var entry in _logQueue.GetConsumingEnumerable())
         {
             try
             {
-                Console.WriteLine(message);
-
-                if (_fileLogging)
-                {
-                    lock (_fileLock)
-                    {
-                        // Note: StreamWriter is not thread-safe, but since this is the only
-                        // thread writing and _fileLock protects it during toggling, it's safe.
-                        _logWriter?.WriteLine(message);
-                    }
-                }
+                string formattedMessage = $"{entry.Timestamp:HH:mm:ss.fff} | {entry.Level.ToString().ToUpper()} | {entry.Message}";
+                Console.WriteLine(formattedMessage);
+                
+                // No lock needed here. The writer is volatile and only written by the toggle method.
+                _logWriter?.WriteLine(formattedMessage);
             }
             catch (Exception ex)
             {
-                // If logging itself fails, write an error to the console.
                 Console.WriteLine($"[FATAL] Logger failed: {ex.Message}");
             }
         }
-
-        // After the loop, ensure the writer is flushed and disposed.
-        lock (_fileLock)
-        {
-            _logWriter?.Flush();
-            _logWriter?.Dispose();
-            _logWriter = null;
-        }
     }
 
-    /// <summary>
-    /// Adds a message to the logging queue. This method returns immediately.
-    /// </summary>
-    /// <param name="message">The message to log.</param>
     public static void Log(string message)
     {
-        // Don't block the caller if the queue is full (though unlikely with default unbounded size).
-        _logQueue.TryAdd($"{DateTime.Now:HH:mm:ss.fff} | {message}");
+        _logQueue.TryAdd(new LogEntry(LogLevel.Info, message));
+    }
+    
+    public static void LogError(string message)
+    {
+        _logQueue.TryAdd(new LogEntry(LogLevel.Error, message));
     }
 
-    /// <summary>
-    /// Adds a debug message to the queue if verbose mode is enabled.
-    /// The message factory is only evaluated if needed, saving performance.
-    /// </summary>
-    /// <param name="messageFactory">A function that produces the message to log.</param>
     public static void LogDebug(Func<string> messageFactory)
     {
         if (_verbose)
         {
-            Log($"[DEBUG] {messageFactory()}");
+            _logQueue.TryAdd(new LogEntry(LogLevel.Debug, messageFactory()));
         }
     }
 
@@ -97,53 +82,49 @@ public static class Logger
         if (verbose) Log("Verbose mode enabled");
     }
 
-    /// <summary>
-    /// Enables or disables file logging. This operation is thread-safe.
-    /// </summary>
     public static void ToggleFileLogging()
     {
+        // This is the only place where the writer is assigned or disposed, so we lock here.
         lock (_fileLock)
         {
-            _fileLogging = !_fileLogging;
-            if (_fileLogging)
+            if (_logWriter == null)
             {
                 try
                 {
-                    // Initialize the StreamWriter. AutoFlush is false for performance.
-                    // The consumer task will handle flushing periodically.
-                    _logWriter = new StreamWriter("autoskip_dialogue.log", true, Encoding.UTF8) { AutoFlush = false };
+                    // Use a buffer for performance and manually flush in the shutdown.
+                    var stream = new FileStream("autoskip_dialogue.log", FileMode.Append, FileAccess.Write, FileShare.Read);
+                    _logWriter = new StreamWriter(stream, Encoding.UTF8, 4096) { AutoFlush = false };
                     Log("File logging enabled.");
                 }
                 catch (Exception ex)
                 {
-                    Log($"[ERROR] Failed to enable file logging: {ex.Message}");
-                    _fileLogging = false;
+                    LogError($"Failed to enable file logging: {ex.Message}");
                 }
             }
             else
             {
                 Log("File logging disabled.");
-                // The consumer will see _fileLogging is false. Flush and null out the writer.
-                _logWriter?.Flush();
-                _logWriter?.Dispose();
+                _logWriter.Flush();
+                _logWriter.Dispose();
                 _logWriter = null;
             }
         }
     }
 
-    /// <summary>
-    /// Signals the logger to process any remaining messages and shut down gracefully.
-    /// This should be called before the application exits.
-    /// </summary>
     public static void Shutdown()
     {
         Log("Logger shutting down...");
-        // Mark the queue as "complete", which will cause GetConsumingEnumerable to exit
-        // once the queue is empty.
         _logQueue.CompleteAdding();
 
-        // Wait for the consumer task to finish processing all items.
-        // A timeout is added as a safeguard against unforeseen hangs.
-        _consumerTask.Wait(2000);
+        // Wait for the consumer to finish.
+        _consumerTask.Wait(1500);
+
+        // Final flush and close of the file writer.
+        lock (_fileLock)
+        {
+            _logWriter?.Flush();
+            _logWriter?.Dispose();
+            _logWriter = null;
+        }
     }
 }

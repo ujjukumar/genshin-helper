@@ -259,7 +259,7 @@ internal class AutoSkipper : IDisposable
         }
         catch (Exception ex)
         {
-            Logger.Log($"[FATAL] An unexpected error occurred in the main loop: {ex.Message}");
+            Logger.LogError($"An unexpected error occurred in the main loop: {ex.Message}");
             Logger.Log(ex.ToString());
         }
         finally
@@ -294,7 +294,7 @@ internal class AutoSkipper : IDisposable
             }
         }
     }
-
+    
     private void SleepUntil(double targetTime)
     {
         if (ShouldExit) return;

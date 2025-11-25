@@ -3,7 +3,7 @@ using System.Runtime.InteropServices;
 namespace AutoSkipper;
 
 // --- 1. Low Level Native Interop (Win32 API) ---
-internal static unsafe partial class Native
+internal static partial class Native
 {
     [LibraryImport("user32.dll")] public static partial int GetSystemMetrics(int nIndex);
     [LibraryImport("user32.dll")] public static partial IntPtr GetForegroundWindow();

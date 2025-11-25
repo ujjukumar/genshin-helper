@@ -1,6 +1,9 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Text;
+using System.Threading.Tasks;
+using System;
+using System.IO;
 
 namespace AutoSkipper;
 

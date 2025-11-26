@@ -2,6 +2,7 @@ using System;
 using System.Diagnostics;
 using System.Threading;
 using System.Threading.Tasks;
+using Spectre.Console;
 
 namespace AutoSkipper;
 
@@ -36,6 +37,10 @@ internal class AutoSkipper : IDisposable
     private bool _windowActive = false;
     private static ReadOnlySpan<char> GenshinWindowTitle => "Genshin Impact".AsSpan();
 
+    // Counter State
+    private int _pressCount = 0;
+    private double _sessionStartTime = 0.0;
+    private StatusContext? _statusContext;
 
     public AutoSkipper(ScreenConfig cfg)
     {
@@ -121,7 +126,30 @@ internal class AutoSkipper : IDisposable
 
     public void Run()
     {
-        Logger.Log("Instructions: F7=Log, F8=Start, F9=Pause, F12=Exit. Mouse4=T, Mouse5=Burst.");
+        AnsiConsole.Status()
+            .Spinner(Spinner.Known.SimpleDots) // Fallback, but we will override style
+            .SpinnerStyle(Style.Parse("black")) // Hide spinner by making it black (or match bg)
+            .Start("Waiting for input...", ctx =>
+            {
+                ctx.Spinner(new NoSpinner()); // Use custom no-op spinner
+                _statusContext = ctx;
+                RunInternal();
+            });
+    }
+
+    // Custom spinner that does nothing
+    private class NoSpinner : Spinner
+    {
+        public override TimeSpan Interval => TimeSpan.FromMilliseconds(1000);
+        public override bool IsUnicode => false;
+        public override IReadOnlyList<string> Frames => new[] { " " };
+    }
+
+    private void RunInternal()
+    {
+        Logger.Log("Ready.");
+        UpdateStatus("Ready");
+        
         double lastPressTime = GetTime();
         double nextInterval = NextKeyInterval();
         double nextStateCheck = 0.0;
@@ -135,6 +163,8 @@ internal class AutoSkipper : IDisposable
 
                 if (!_running)
                 {
+                    UpdateStatus("Paused");
+                    // Do not call ResetCounter here repeatedly
                     _wakeEvent.Wait(500);
                     _wakeEvent.Reset();
                     lastPressTime = GetTime();
@@ -145,11 +175,14 @@ internal class AutoSkipper : IDisposable
                 if (isActive != _windowActive)
                 {
                     _windowActive = isActive;
-                    Logger.Log(isActive ? "Window State: ACTIVE" : "Window State: INACTIVE");
+                    string countLog = GetCountLog();
+                    ResetCounter();
+                    Logger.Log(isActive ? $"Window State: [green]ACTIVE[/]{countLog}" : $"Window State: [red]INACTIVE[/]{countLog}");
                 }
 
                 if (!isActive)
                 {
+                    UpdateStatus("Waiting for Window...");
                     SleepUntil(now + 0.4);
                     continue;
                 }
@@ -157,6 +190,7 @@ internal class AutoSkipper : IDisposable
                 // Active break
                 if (now < _breakUntil)
                 {
+                    UpdateStatus($"Taking a break... ({_breakUntil - now:F1}s)");
                     SleepUntil(_breakUntil);
                     continue;
                 }
@@ -169,7 +203,9 @@ internal class AutoSkipper : IDisposable
                     if (br != BreakType.None)
                     {
                         double dur = BreakDuration(br);
-                        Logger.Log($"Break: {br} {dur:F1}s");
+                        string countLog = GetCountLog();
+                        ResetCounter();
+                        Logger.Log($"Break: [yellow]{br}[/] {dur:F1}s{countLog}");
                         _breakUntil = now + dur;
                         nextInterval = NextKeyInterval();
                         continue;
@@ -202,12 +238,15 @@ internal class AutoSkipper : IDisposable
                     if (isDialogue != _inDialogue)
                     {
                         _inDialogue = isDialogue;
-                        Logger.Log(isDialogue ? "Dialogue State: DETECTED" : "Dialogue State: ENDED");
+                        string countLog = GetCountLog();
+                        ResetCounter();
+                        Logger.Log(isDialogue ? $"Dialogue State: [green]DETECTED[/]{countLog}" : $"Dialogue State: [yellow]ENDED[/]{countLog}");
                     }
 
                     nextStateCheck = now + 0.15;
                     if (!isDialogue)
                     {
+                        UpdateStatus("Idle (No Dialogue)");
                         SleepUntil(now + 0.25);
                         continue;
                     }
@@ -216,6 +255,7 @@ internal class AutoSkipper : IDisposable
                 // Post-burst pause
                 if (now < _postBurstPauseUntil)
                 {
+                    UpdateStatus("Pausing after burst...");
                     SleepUntil(_postBurstPauseUntil);
                     continue;
                 }
@@ -234,7 +274,9 @@ internal class AutoSkipper : IDisposable
                     {
                         _burstMode = true;
                         _burstRemaining = Random.Shared.Next(3, 6);
-                        Logger.Log($"Burst mode: {_burstRemaining}");
+                        string countLog = GetCountLog();
+                        ResetCounter();
+                        Logger.Log($"Burst mode: [red]{_burstRemaining}[/]{countLog}");
                     }
 
                     if (_skipNext)
@@ -249,6 +291,10 @@ internal class AutoSkipper : IDisposable
                         lastPressTime = now;
                         nextInterval = NextKeyInterval();
                     }
+                }
+                else
+                {
+                    UpdateStatus($"Skipping... [green]{_pressCount}[/] presses");
                 }
 
                 double nextActionTime = lastPressTime + nextInterval;
@@ -278,10 +324,18 @@ internal class AutoSkipper : IDisposable
         if (useSpace) InputSender.TapSpace(); else InputSender.TapF();
         Logger.LogDebug(() => $"Press: {key}");
         
+        if (!useSpace)
+        {
+            _pressCount++;
+            UpdateStatus($"Skipping... [green]{_pressCount}[/] presses");
+        }
+        
         if (!useSpace && _doubleNext)
         {
             _doubleNext = false;
             InputSender.TapF();
+            _pressCount++;
+            UpdateStatus($"Skipping... [green]{_pressCount}[/] presses");
             _postBurstPauseUntil = now + 0.4 + Random.Shared.NextDouble() * 0.6;
 
             Logger.LogDebug(() => "Press: F (double)");
@@ -316,7 +370,14 @@ internal class AutoSkipper : IDisposable
     public void ToggleRun(bool on) 
     { 
         _running = on; 
-        Logger.Log(on ? "RUN" : "PAUSE"); 
+        string countLog = "";
+        if (!on) 
+        {
+            countLog = GetCountLog();
+            ResetCounter();
+            UpdateStatus("Paused");
+        }
+        Logger.Log(on ? "[bold green]RUN[/]" : $"[bold yellow]PAUSE[/]{countLog}"); 
         Wake(); 
     }
     
@@ -336,20 +397,53 @@ internal class AutoSkipper : IDisposable
             
             Task.Run(async () =>
             {
-                Logger.Log("Burst Start");
+                Logger.LogWarning("Burst Start");
+                ResetCounter();
                 var cts = new CancellationTokenSource(TimeSpan.FromSeconds(4));
                 using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(token, cts.Token);
                 while (!linkedCts.IsCancellationRequested)
                 {
-                    if (IsGameActive()) InputSender.TapF();
+                    if (IsGameActive()) 
+                    {
+                        InputSender.TapF();
+                        _pressCount++;
+                        UpdateStatus($"Bursting... [red]{_pressCount}[/] presses");
+                    }
                     try
                     {
                         await Task.Delay(_cfg.Config.BurstModeDelayMs, linkedCts.Token);
                     }
                     catch (TaskCanceledException) { break; }
                 }
-                Logger.Log("Burst End");
+                string countLog = GetCountLog();
+                Logger.LogWarning($"Burst End{countLog}");
+                ResetCounter();
             }, token);
+        }
+    }
+
+    private string GetCountLog()
+    {
+        if (_pressCount > 0)
+        {
+            double duration = GetTime() - _sessionStartTime;
+            return $". Total F presses: [cyan]{_pressCount}[/] in [cyan]{duration:F1}s[/]";
+        }
+        return "";
+    }
+
+    private void ResetCounter()
+    {
+        _pressCount = 0;
+        _sessionStartTime = GetTime();
+        UpdateStatus("Ready");
+    }
+
+    private void UpdateStatus(string status)
+    {
+        if (_statusContext != null)
+        {
+            _statusContext.Status(status);
         }
     }
 }

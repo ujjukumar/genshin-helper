@@ -4,6 +4,7 @@ using System.IO;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
+using Spectre.Console;
 
 namespace AutoSkipper;
 
@@ -11,7 +12,7 @@ namespace AutoSkipper;
 // It uses a background thread to process and write log messages from a concurrent queue.
 public static class Logger
 {
-    private enum LogLevel { Info, Debug, Error }
+    private enum LogLevel { Info, Debug, Error, Success, Warning }
 
     private readonly struct LogEntry
     {
@@ -45,14 +46,29 @@ public static class Logger
         {
             try
             {
-                string formattedMessage = $"{entry.Timestamp:HH:mm:ss.fff} | {entry.Level.ToString().ToUpper()} | {entry.Message}";
-                Console.WriteLine(formattedMessage);
+                string timestamp = $"[grey]{entry.Timestamp:HH:mm:ss.fff}[/]";
+                string level = entry.Level switch
+                {
+                    LogLevel.Info => "[blue]INFO[/]",
+                    LogLevel.Debug => "[grey]DEBUG[/]",
+                    LogLevel.Error => "[red]ERROR[/]",
+                    LogLevel.Success => "[green]SUCCESS[/]",
+                    LogLevel.Warning => "[yellow]WARN[/]",
+                    _ => "[white]LOG[/]"
+                };
                 
-                // No lock needed here. The writer is volatile and only written by the toggle method.
-                _logWriter?.WriteLine(formattedMessage);
+                string message = entry.Message;
+                // Basic markup escaping if needed, though we generally trust internal messages
+                // message = Markup.Escape(message); 
+
+                AnsiConsole.MarkupLine($"{timestamp} | {level} | {message}");
+                
+                // File logging remains plain text
+                _logWriter?.WriteLine($"{entry.Timestamp:HH:mm:ss.fff} | {entry.Level.ToString().ToUpper()} | {entry.Message}");
             }
             catch (Exception ex)
             {
+                // Fallback if Spectre fails
                 Console.WriteLine($"[FATAL] Logger failed: {ex.Message}");
             }
         }
@@ -61,6 +77,16 @@ public static class Logger
     public static void Log(string message)
     {
         _logQueue.TryAdd(new LogEntry(LogLevel.Info, message));
+    }
+    
+    public static void LogSuccess(string message)
+    {
+        _logQueue.TryAdd(new LogEntry(LogLevel.Success, message));
+    }
+    
+    public static void LogWarning(string message)
+    {
+        _logQueue.TryAdd(new LogEntry(LogLevel.Warning, message));
     }
     
     public static void LogError(string message)
@@ -94,7 +120,7 @@ public static class Logger
                     // Use a buffer for performance and manually flush in the shutdown.
                     var stream = new FileStream("autoskip_dialogue.log", FileMode.Append, FileAccess.Write, FileShare.Read);
                     _logWriter = new StreamWriter(stream, Encoding.UTF8, 4096) { AutoFlush = false };
-                    Log("File logging enabled.");
+                    LogSuccess("File logging enabled.");
                 }
                 catch (Exception ex)
                 {

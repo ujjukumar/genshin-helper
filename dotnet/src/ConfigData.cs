@@ -23,8 +23,8 @@ internal class ConfigData
     public float DialogueIconWsExtra { get; set; } = 0.02f;
 
     // --- Timing & Probabilities (Simplified) ---
-    public double StandardDelayMin { get; set; } = 0.06;
-    public double StandardDelayMax { get; set; } = 0.12;
+    public double StandardDelayMin { get; set; } = 0.13;
+    public double StandardDelayMax { get; set; } = 0.17;
     
     public double FastBurstChance { get; set; } = 1.0 / 40.0; // ~2.5%
     

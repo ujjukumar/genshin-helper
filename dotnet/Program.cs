@@ -2,6 +2,7 @@ using System;
 using System.Diagnostics;
 using System.Threading;
 using System.Threading.Tasks;
+using Spectre.Console;
 
 namespace AutoSkipper;
 
@@ -10,6 +11,12 @@ internal class Program
 {
     static async Task Main(string[] args)
     {
+        // Fancy Header
+        AnsiConsole.Write(
+            new FigletText("Genshin AutoSkip")
+                .LeftJustified()
+                .Color(Color.Cyan1));
+
         // Parse command line arguments
         bool verbose = false;
         foreach (var arg in args)
@@ -28,6 +35,30 @@ internal class Program
         Logger.SetVerbose(verbose);
         
         var config = await ScreenConfig.CreateAsync();
+        
+        // Display Config Table
+        var table = new Table();
+        table.Border(TableBorder.Rounded);
+        table.AddColumn("[yellow]Setting[/]");
+        table.AddColumn(new TableColumn("[yellow]Value[/]").Centered());
+
+        table.AddRow("Resolution", $"{config.WIDTH}x{config.HEIGHT}");
+        table.AddRow("Window Title", config.WINDOW_TITLE);
+        table.AddRow("Typing Speed", $"{config.Config.StandardDelayMin:F2}s - {config.Config.StandardDelayMax:F2}s");
+        table.AddRow("Break Chance", $"{config.Config.BreakChance:P1}");
+        
+        AnsiConsole.Write(table);
+        AnsiConsole.WriteLine();
+
+        // Instructions Panel
+        var instructions = new Panel(
+            new Markup(
+                "[bold green]F8[/]: Start  [bold yellow]F9[/]: Pause  [bold red]F12[/]: Exit\n" +
+                "[bold blue]F7[/]: Toggle Log File  [bold purple]Mouse5[/]: Burst Mode"))
+            .Header("Controls")
+            .BorderColor(Color.Green);
+        AnsiConsole.Write(instructions);
+        AnsiConsole.WriteLine();
         
         using var skipper = new AutoSkipper(config);
         using var hooks = new GlobalHooks(skipper);

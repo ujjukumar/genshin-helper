@@ -16,4 +16,4 @@ if %errorlevel%==0 (
 )
 
 :: Launch Windows Terminal with the right shell, set folder, bypass policy, and activate venv
-start wt.exe -d "D:\Coding\Python\genshin-dialogue-autoskip\src" %SHELL% -NoExit -ExecutionPolicy Bypass -Command "& 'D:\Coding\Python\genshin-dialogue-autoskip\.venv\Scripts\Activate.ps1'"
+start wt.exe -d "D:\Coding\Python\genshin-dialogue-autoskip\python\src" %SHELL% -NoExit -ExecutionPolicy Bypass -Command "& 'D:\Coding\Python\genshin-dialogue-autoskip\python\.venv\Scripts\Activate.ps1'"

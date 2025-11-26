@@ -12,7 +12,6 @@ from typing import Optional, Tuple, Callable, Dict
 
 from win32api import GetSystemMetrics
 from win32gui import GetForegroundWindow, GetWindowText
-from pyautogui import press, pixel
 from pynput.keyboard import Key, KeyCode, Listener as KeyboardListener, Controller as KeyboardController
 from pynput.mouse import Listener as MouseListener, Button
 from dotenv import find_dotenv, load_dotenv, set_key
@@ -228,7 +227,8 @@ class InputRemapper:
             while perf_counter() < end:
                 try:
                     if self._is_genshin_active():
-                        press('f')
+                        self.keyboard.press('f')
+                        self.keyboard.release('f')
                 except Exception:
                     logger.exception("Spam-F error")
                 # sleep but don't overshoot the end time
@@ -254,6 +254,9 @@ class AutoSkipper:
 
         # Initialize burst pool before first interval calculation
         self._burst_pool = 0  # internal rapid interval counter
+        
+        self.keyboard = KeyboardController()
+        self._cached_hwnd = None
 
         self._last_press_time = perf_counter()
         self._next_interval = self._next_key_interval()
@@ -277,8 +280,14 @@ class AutoSkipper:
     def is_genshin_active(self) -> bool:
         try:
             hwnd = GetForegroundWindow()
+            if self._cached_hwnd and hwnd == self._cached_hwnd:
+                return True
+            
             window_title = GetWindowText(hwnd)
-            return self.config.WINDOW_TITLE.lower() in window_title.lower()
+            if self.config.WINDOW_TITLE.lower() in window_title.lower():
+                self._cached_hwnd = hwnd
+                return True
+            return False
         except Exception:
             return False
 
@@ -438,14 +447,19 @@ class AutoSkipper:
         try:
             # choose key
             use_space = self.rand.random() < (0.1 if not self._burst_mode else 0.1)
+            key_obj = Key.space if use_space else 'f'
+            
+            self.keyboard.press(key_obj)
+            self.keyboard.release(key_obj)
+            
             key_name = "space" if use_space else "f"
-            press(key_name)
             logger.debug(f"Pressed {key_name.upper()}")
 
             if (not use_space) and self._double_next:
                 self._double_next = False
                 # small delay before second press
-                press("f")
+                self.keyboard.press('f')
+                self.keyboard.release('f')
                 logger.debug("Double F")
                 self._post_burst_pause_until = now + self.rand.uniform(0.4, 1.0)
 

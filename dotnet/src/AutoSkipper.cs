@@ -90,31 +90,34 @@ internal class AutoSkipper : IDisposable
         if (_burstPool > 0)
         {
             _burstPool--;
-            return 0.05 + Random.Shared.NextDouble() * 0.04;
+            // Fast burst: 50% of standard speed
+            double min = _cfg.Config.StandardDelayMin * 0.5;
+            double max = _cfg.Config.StandardDelayMax * 0.5;
+            return min + Random.Shared.NextDouble() * (max - min);
         }
-        if (Random.Shared.NextDouble() < 1.0/50.0)
+        
+        // Chance to enter fast burst mode
+        if (Random.Shared.NextDouble() < _cfg.Config.FastBurstChance)
         {
             _burstPool = Random.Shared.Next(2, 6);
-            return 0.05 + Random.Shared.NextDouble() * 0.04;
+            double min = _cfg.Config.StandardDelayMin * 0.5;
+            double max = _cfg.Config.StandardDelayMax * 0.5;
+            return min + Random.Shared.NextDouble() * (max - min);
         }
-        if (Random.Shared.NextDouble() < 1.0/8.0)
-        {
-            return 0.09 + Random.Shared.NextDouble() * 0.16;
-        }
-        return 0.11 + Random.Shared.NextDouble() * 0.10;
+
+        // Standard speed
+        return _cfg.Config.StandardDelayMin + Random.Shared.NextDouble() * (_cfg.Config.StandardDelayMax - _cfg.Config.StandardDelayMin);
     }
 
     private BreakType MaybeBreak()
     {
-        double r = Random.Shared.NextDouble();
-        if (r < 1.0 / 100.0) return BreakType.Long;
-        if (r < 1.0 / 100.0 + 1.0 / 25.0) return BreakType.Short;
+        // Simplified break logic: just one type of break, but we keep the enum for now
+        if (Random.Shared.NextDouble() < _cfg.Config.BreakChance) return BreakType.Short;
         return BreakType.None;
     }
 
-    private double BreakDuration(BreakType kind) => kind == BreakType.Long
-        ? 4.0 + Random.Shared.NextDouble() * 6.0
-        : 2.0 + Random.Shared.NextDouble() * 4.0;
+    private double BreakDuration(BreakType kind) => 
+        _cfg.Config.BreakDurationMin + Random.Shared.NextDouble() * (_cfg.Config.BreakDurationMax - _cfg.Config.BreakDurationMin);
 
     public void Run()
     {
@@ -270,7 +273,7 @@ internal class AutoSkipper : IDisposable
     
     private void PerformPress(double now)
     {
-        bool useSpace = Random.Shared.NextDouble() < (_burstMode ? 0.1 : 0.1);
+        bool useSpace = Random.Shared.NextDouble() < (_burstMode ? 0.1 : _cfg.Config.SpaceKeyChance);
         string key = useSpace ? "Space" : "F";
         if (useSpace) InputSender.TapSpace(); else InputSender.TapF();
         Logger.LogDebug(() => $"Press: {key}");
@@ -341,7 +344,7 @@ internal class AutoSkipper : IDisposable
                     if (IsGameActive()) InputSender.TapF();
                     try
                     {
-                        await Task.Delay(100 + Random.Shared.Next(0, 80), linkedCts.Token);
+                        await Task.Delay(_cfg.Config.BurstModeDelayMs, linkedCts.Token);
                     }
                     catch (TaskCanceledException) { break; }
                 }

@@ -21,4 +21,18 @@ internal class ConfigData
     public int PlayingIconWsX { get; set; } = 230;
     public int DialogueIconWsX { get; set; } = 2770;
     public float DialogueIconWsExtra { get; set; } = 0.02f;
+
+    // --- Timing & Probabilities (Simplified) ---
+    public double StandardDelayMin { get; set; } = 0.06;
+    public double StandardDelayMax { get; set; } = 0.12;
+    
+    public double FastBurstChance { get; set; } = 1.0 / 40.0; // ~2.5%
+    
+    public double BreakChance { get; set; } = 0.015; // 1.5%
+    public double BreakDurationMin { get; set; } = 2.0;
+    public double BreakDurationMax { get; set; } = 8.0;
+
+    public double SpaceKeyChance { get; set; } = 0.1;
+    
+    public int BurstModeDelayMs { get; set; } = 120;
 }

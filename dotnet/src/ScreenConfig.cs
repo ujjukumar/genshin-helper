@@ -14,6 +14,8 @@ internal class ScreenConfig
     public (int x, int ly, int hy) DIALOGUE_ICON { get; }
     public (int x, int y) LOADING_PIXEL { get; }
     public string WINDOW_TITLE { get; }
+    
+    public ConfigData Config => _configData;
 
     private readonly ConfigData _configData;
 

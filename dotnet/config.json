@@ -13,5 +13,13 @@
   "LoadingPixelY": 700,
   "PlayingIconWsX": 230,
   "DialogueIconWsX": 2770,
-  "DialogueIconWsExtra": 0.02
+  "DialogueIconWsExtra": 0.02,
+  "StandardDelayMin": 0.06,
+  "StandardDelayMax": 0.12,
+  "FastBurstChance": 0.025,
+  "BreakChance": 0.015,
+  "BreakDurationMin": 2.0,
+  "BreakDurationMax": 8.0,
+  "SpaceKeyChance": 0.1,
+  "BurstModeDelayMs": 120
 }

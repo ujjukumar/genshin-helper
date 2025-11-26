@@ -1,10 +1,26 @@
-.venv
-.env
+# General
+.DS_Store
+Thumbs.db
 *.log
-*/__pycache__/*
+
+# IDE
 .vscode/
-dotnet/obj/
-dotnet/bin/
-/dotnet/.vs
-dotnet/Benchmarks/obj/
-dotnet/Benchmarks/bin/
+.idea/
+*.suo
+*.user
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+*.egg-info/
+dist/
+build/
+.env
+
+# Dotnet
+bin/
+obj/
+.vs/
+TestResults/

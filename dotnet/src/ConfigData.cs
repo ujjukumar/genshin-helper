@@ -35,4 +35,6 @@ internal class ConfigData
     public double SpaceKeyChance { get; set; } = 0.1;
     
     public int BurstModeDelayMs { get; set; } = 120;
+
+    public int InactivePauseSeconds { get; set; } = 10;
 }

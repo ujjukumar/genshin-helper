@@ -40,6 +40,7 @@ internal class AutoSkipper : IDisposable
     // Counter State
     private int _pressCount = 0;
     private double _sessionStartTime = 0.0;
+    private double _inactiveSince = 0.0;
     private StatusContext? _statusContext;
 
     public AutoSkipper(ScreenConfig cfg)
@@ -172,6 +173,22 @@ internal class AutoSkipper : IDisposable
                 }
 
                 bool isActive = IsGameActive();
+
+                if (isActive)
+                {
+                    _inactiveSince = 0.0;
+                }
+                else
+                {
+                    if (_inactiveSince == 0.0) _inactiveSince = now;
+                    if (now - _inactiveSince > _cfg.Config.InactivePauseSeconds)
+                    {
+                        Logger.Log($"[yellow]Paused due to inactivity ({_cfg.Config.InactivePauseSeconds}s)[/]");
+                        ToggleRun(false);
+                        _inactiveSince = 0.0;
+                    }
+                }
+
                 if (isActive != _windowActive)
                 {
                     _windowActive = isActive;

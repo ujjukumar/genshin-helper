@@ -36,5 +36,5 @@ internal class ConfigData
     
     public int BurstModeDelayMs { get; set; } = 120;
 
-    public int InactivePauseSeconds { get; set; } = 10;
+    public int InactivePauseSeconds { get; set; } = 120;
 }

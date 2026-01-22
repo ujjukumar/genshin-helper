@@ -9,7 +9,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
-	<Platforms>AnyCPU;x64</Platforms>
+	<Platforms>x64</Platforms>
 
 	  <!-- AOT and Trimming Properties -->
     <PublishAot>true</PublishAot>
@@ -29,17 +29,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <PackageReference Include="BenchmarkDotNet" Version="0.15.6" />
     <PackageReference Include="Spectre.Console" Version="0.54.0" />
-  </ItemGroup>
-
-	<ItemGroup>
-		<InternalsVisibleTo Include="AutoSkipper.Benchmarks" />
-	</ItemGroup>
-
-  <ItemGroup>
-    <EmbeddedResource Remove="Benchmarks\**" />
-    <None Remove="Benchmarks\**" />
   </ItemGroup>
 
   <ItemGroup>

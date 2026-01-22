@@ -17,6 +17,7 @@ internal class AutoSkipper : IDisposable
 {
     private readonly ScreenConfig _cfg;
     private bool _running = false;
+    public bool IsRunning => _running;
     public bool ShouldExit = false;
     private readonly IntPtr _hdc;
     private CancellationTokenSource _spamCancel = new();

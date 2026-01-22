@@ -1,107 +1,132 @@
 using System;
-using System.Diagnostics;
+using System.Drawing;
 using System.Threading;
 using System.Threading.Tasks;
+using System.Windows.Forms;
 using Spectre.Console;
 
 namespace AutoSkipper;
 
-// --- 6. Entry Point ---
 internal class Program
 {
-    static async Task Main(string[] args)
+    [STAThread]
+    static void Main(string[] args)
     {
-        // Fancy Header
-        AnsiConsole.Write(
-            new FigletText("Genshin AutoSkip")
-                .LeftJustified()
-                .Color(Color.Cyan1));
-
         // Parse command line arguments
         bool verbose = false;
         foreach (var arg in args)
         {
-            if (arg == "--benchmark")
-            {
-                RunBenchmark();
-                return;
-            }
-            if (arg == "-v" || arg == "--verbose")
-            {
-                verbose = true;
-            }
+            if (arg == "-v" || arg == "--verbose") verbose = true;
         }
         
         Logger.SetVerbose(verbose);
         
-        var config = await ScreenConfig.CreateAsync();
-        
-        // Display Config Table
-        var table = new Table();
-        table.Border(TableBorder.Rounded);
-        table.AddColumn("[yellow]Setting[/]");
-        table.AddColumn(new TableColumn("[yellow]Value[/]").Centered());
+        ApplicationConfiguration.Initialize();
 
-        table.AddRow("Resolution", $"{config.WIDTH}x{config.HEIGHT}");
-        table.AddRow("Window Title", config.WINDOW_TITLE);
-        table.AddRow("Typing Speed", $"{config.Config.StandardDelayMin:F2}s - {config.Config.StandardDelayMax:F2}s");
-        table.AddRow("Break Chance", $"{config.Config.BreakChance:P1}");
-        
-        AnsiConsole.Write(table);
-        AnsiConsole.WriteLine();
+        try
+        {
+            // Initialize configuration (synchronously for startup)
+            var config = ScreenConfig.CreateAsync().GetAwaiter().GetResult();
+            
+            // Run the application context
+            using var context = new AutoSkipperContext(config);
+            Application.Run(context);
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show($"Startup Error: {ex.Message}", "AutoSkipper Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+        }
+    }
+}
 
-        // Instructions Panel
-        var instructions = new Panel(
-            new Markup(
-                "[bold green]F8[/]: Start  [bold yellow]F9[/]: Pause  [bold red]F12[/]: Exit\n" +
-                "[bold blue]F7[/]: Toggle Log File  [bold purple]Mouse5[/]: Burst Mode"))
-            .Header("Controls")
-            .BorderColor(Color.Green);
-        AnsiConsole.Write(instructions);
-        AnsiConsole.WriteLine();
-        
-        using var skipper = new AutoSkipper(config);
-        using var hooks = new GlobalHooks(skipper);
+internal class AutoSkipperContext : ApplicationContext
+{
+    private readonly NotifyIcon _notifyIcon;
+    private readonly AutoSkipper _skipper;
+    private readonly GlobalHooks _hooks;
+    private readonly Thread _logicThread;
 
-        Thread logicThread = new(skipper.Run)
+    public AutoSkipperContext(ScreenConfig config)
+    {
+        // Try to find the icon, fallback to system icon
+        Icon appIcon = SystemIcons.Application;
+        string iconPath = System.IO.Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Assets", "auto_marker.ico"); // Assuming user might have an ico
+        // If we want to use the png from bin/Assets as Icon, we'd need to convert it, but SystemIcons.Application is safer for now.
+        
+        _notifyIcon = new NotifyIcon
+        {
+            Icon = appIcon,
+            Text = "Genshin AutoSkipper",
+            Visible = true
+        };
+
+        // Context Menu
+        var contextMenu = new ContextMenuStrip();
+        
+        var startItem = new ToolStripMenuItem("Start/Resume (F8)", null, (s, e) => _skipper.ToggleRun(true));
+        var pauseItem = new ToolStripMenuItem("Pause (F9)", null, (s, e) => _skipper.ToggleRun(false));
+        var toggleLogItem = new ToolStripMenuItem("Toggle Log File (F7)", null, (s, e) => Logger.ToggleFileLogging());
+        var exitItem = new ToolStripMenuItem("Exit (F12)", null, Exit);
+
+        contextMenu.Items.Add(startItem);
+        contextMenu.Items.Add(pauseItem);
+        contextMenu.Items.Add(new ToolStripSeparator());
+        contextMenu.Items.Add(toggleLogItem);
+        contextMenu.Items.Add(new ToolStripSeparator());
+        contextMenu.Items.Add(exitItem);
+
+        _notifyIcon.ContextMenuStrip = contextMenu;
+        
+        // Double click to toggle run status
+        _notifyIcon.DoubleClick += (s, e) => _skipper.ToggleRun(!_skipper.IsRunning);
+
+        // Initialize Logic
+        _skipper = new AutoSkipper(config);
+        _hooks = new GlobalHooks(_skipper);
+
+        _logicThread = new Thread(_skipper.Run)
         {
             IsBackground = true
         };
-        logicThread.Start();
+        _logicThread.Start();
+        
+        // Log startup
+        Logger.LogSuccess("AutoSkipper started minimized to tray.");
+        Logger.Log("Use F8/F9 or Tray Icon to control.");
+    }
 
-        // Standard Win32 Message Loop for Hooks
-        while (Native.GetMessage(out Native.MSG msg, IntPtr.Zero, 0, 0) > 0)
+    private void Exit(object? sender, EventArgs e)
+    {
+        // This will break the Application.Run loop eventually
+        // But we manually clean up first
+        Cleanup();
+        Application.Exit();
+    }
+
+    private void Cleanup()
+    {
+        _notifyIcon.Visible = false;
+        
+        _skipper.ShouldExit = true;
+        _skipper.Wake();
+
+        if (_logicThread.IsAlive)
         {
-            Native.TranslateMessage(msg);
-            Native.DispatchMessage(msg);
+            _logicThread.Join(500);
         }
 
-        skipper.ShouldExit = true;
-        skipper.Wake();
-        logicThread.Join();
-
+        _hooks.Dispose();
+        _skipper.Dispose();
         Logger.Shutdown();
     }
 
-    static void RunBenchmark()
+    protected override void Dispose(bool disposing)
     {
-        IntPtr hdc = Native.GetDC(IntPtr.Zero);
-        int count = 100;
-        Logger.Log($"Benchmarking {count} GetPixel calls.");
-
-        long start = Stopwatch.GetTimestamp();
-        for (int i = 0; i < count; i++)
+        if (disposing)
         {
-            _ = Native.GetPixel(hdc, 100, 100);
+            Cleanup();
+            _notifyIcon.Dispose();
         }
-        long end = Stopwatch.GetTimestamp();
-
-        _ = Native.ReleaseDC(IntPtr.Zero, hdc);
-
-        double duration = (end - start) / (double)Stopwatch.Frequency;
-        double ops = count / duration;
-
-        Logger.Log($"Time: {duration:F4} seconds");
-        Logger.Log($"Speed: {ops:N0} ops/sec");
+        base.Dispose(disposing);
     }
 }

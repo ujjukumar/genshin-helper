@@ -15,6 +15,9 @@ internal enum BreakType
 
 internal class AutoSkipper : IDisposable
 {
+    public event Action<bool>? OnDialogueStateChanged;
+    public event Action<bool>? OnRunningStateChanged;
+    
     private readonly ScreenConfig _cfg;
     private bool _running = false;
     public bool IsRunning => _running;
@@ -34,6 +37,30 @@ internal class AutoSkipper : IDisposable
     private double _breakUntil = 0.0;
     private double _lastBreakCheck = 0.0;
     private const double BreakInterval = 30.0;
+    private const double FastBurstMultiplier = 0.5;
+    private const double StateCheckInterval = 0.15;
+    private const double ActiveDialogueCheckInterval = 0.25;
+    private const double IdleSleepInterval = 0.25;
+    private const double MaxSleepInterval = 0.35;
+    private const double PostBurstPauseBase = 0.4;
+    private const double PostBurstPauseRandom = 0.6;
+    private const double SkipNextChance = 1.0 / 40.0;
+    private const double DoubleNextChance = 1.0 / 35.0;
+    private const double BurstModeChance = 1.0 / 60.0;
+    private const double BurstModeSpaceChance = 0.1;
+    private const int BurstPoolMin = 2;
+    private const int BurstPoolMax = 6;
+    private const int BurstRemainingMin = 3;
+    private const int BurstRemainingMax = 6;
+    private const int WaitEventTimeout = 500;
+    private const double WindowCheckInterval = 0.4;
+    private const double FastBurstChance = 1.0 / 40.0;
+    private const double BreakChance = 0.015;
+    private const double BreakDurationMin = 2.0;
+    private const double BreakDurationMax = 8.0;
+    private const double SpaceKeyChance = 0.1;
+    private const int BurstModeDelayMs = 120;
+    private const int InactivePauseSeconds = 120;
     private bool _inDialogue = false;
     private bool _windowActive = false;
     private static ReadOnlySpan<char> GenshinWindowTitle => "Genshin Impact".AsSpan();
@@ -82,12 +109,24 @@ internal class AutoSkipper : IDisposable
         return isActive;
     }
 
-    public static bool ColorsMatch(uint pixel, int r, int g, int b)
+    public bool ColorsMatch(uint pixel, int r, int g, int b)
     {
         int pr = (int)(pixel & 0xFF);
         int pg = (int)((pixel >> 8) & 0xFF);
         int pb = (int)((pixel >> 16) & 0xFF);
-        return Math.Abs(pr - r) <= 10 && Math.Abs(pg - g) <= 10 && Math.Abs(pb - b) <= 10;
+        int tolerance = _cfg.Config.ColorTolerance;
+        return Math.Abs(pr - r) <= tolerance && Math.Abs(pg - g) <= tolerance && Math.Abs(pb - b) <= tolerance;
+    }
+
+    private uint GetPixelWithRetry(int x, int y, int maxRetries = 3)
+    {
+        for (int i = 0; i < maxRetries; i++)
+        {
+            uint pixel = Native.GetPixel(_hdc, x, y);
+            if (pixel != uint.MaxValue) return pixel;
+            if (i < maxRetries - 1) Thread.Sleep(1);
+        }
+        return uint.MaxValue;
     }
 
     private static double GetTime() => Stopwatch.GetTimestamp() / (double)Stopwatch.Frequency;
@@ -98,17 +137,17 @@ internal class AutoSkipper : IDisposable
         {
             _burstPool--;
             // Fast burst: 50% of standard speed
-            double min = _cfg.Config.StandardDelayMin * 0.5;
-            double max = _cfg.Config.StandardDelayMax * 0.5;
+            double min = _cfg.Config.StandardDelayMin * FastBurstMultiplier;
+            double max = _cfg.Config.StandardDelayMax * FastBurstMultiplier;
             return min + Random.Shared.NextDouble() * (max - min);
         }
         
         // Chance to enter fast burst mode
-        if (Random.Shared.NextDouble() < _cfg.Config.FastBurstChance)
+        if (Random.Shared.NextDouble() < FastBurstChance)
         {
-            _burstPool = Random.Shared.Next(2, 6);
-            double min = _cfg.Config.StandardDelayMin * 0.5;
-            double max = _cfg.Config.StandardDelayMax * 0.5;
+            _burstPool = Random.Shared.Next(BurstPoolMin, BurstPoolMax);
+            double min = _cfg.Config.StandardDelayMin * FastBurstMultiplier;
+            double max = _cfg.Config.StandardDelayMax * FastBurstMultiplier;
             return min + Random.Shared.NextDouble() * (max - min);
         }
 
@@ -119,12 +158,12 @@ internal class AutoSkipper : IDisposable
     private BreakType MaybeBreak()
     {
         // Simplified break logic: just one type of break, but we keep the enum for now
-        if (Random.Shared.NextDouble() < _cfg.Config.BreakChance) return BreakType.Short;
+        if (Random.Shared.NextDouble() < BreakChance) return BreakType.Short;
         return BreakType.None;
     }
 
     private double BreakDuration(BreakType kind) => 
-        _cfg.Config.BreakDurationMin + Random.Shared.NextDouble() * (_cfg.Config.BreakDurationMax - _cfg.Config.BreakDurationMin);
+        BreakDurationMin + Random.Shared.NextDouble() * (BreakDurationMax - BreakDurationMin);
 
     public void Run()
     {
@@ -167,7 +206,7 @@ internal class AutoSkipper : IDisposable
                 {
                     UpdateStatus("Paused");
                     // Do not call ResetCounter here repeatedly
-                    _wakeEvent.Wait(500);
+                    _wakeEvent.Wait(WaitEventTimeout);
                     _wakeEvent.Reset();
                     lastPressTime = GetTime();
                     continue;
@@ -182,9 +221,9 @@ internal class AutoSkipper : IDisposable
                 else
                 {
                     if (_inactiveSince == 0.0) _inactiveSince = now;
-                    if (now - _inactiveSince > _cfg.Config.InactivePauseSeconds)
+                    if (now - _inactiveSince > InactivePauseSeconds)
                     {
-                        Logger.Log($"[yellow]Paused due to inactivity ({_cfg.Config.InactivePauseSeconds}s)[/]");
+                        Logger.Log($"[yellow]Paused due to inactivity ({InactivePauseSeconds}s)[/]");
                         ToggleRun(false);
                         _inactiveSince = 0.0;
                     }
@@ -201,7 +240,7 @@ internal class AutoSkipper : IDisposable
                 if (!isActive)
                 {
                     UpdateStatus("Waiting for Window...");
-                    SleepUntil(now + 0.4);
+                    SleepUntil(now + WindowCheckInterval);
                     continue;
                 }
 
@@ -233,7 +272,7 @@ internal class AutoSkipper : IDisposable
                 // Dialogue detection
                 if (now >= nextStateCheck)
                 {
-                    uint pPlaying = Native.GetPixel(_hdc, _cfg.PLAYING_ICON.x, _cfg.PLAYING_ICON.y);
+                    uint pPlaying = GetPixelWithRetry(_cfg.PLAYING_ICON.x, _cfg.PLAYING_ICON.y);
                     bool isPlaying = ColorsMatch(pPlaying, 236, 229, 216);
 
                     Logger.LogDebug(() => $"Playing pixel: RGB({(pPlaying & 0xFF)},{((pPlaying >> 8) & 0xFF)},{((pPlaying >> 16) & 0xFF)}) @ ({_cfg.PLAYING_ICON.x},{_cfg.PLAYING_ICON.y}) -> {isPlaying}");
@@ -241,11 +280,11 @@ internal class AutoSkipper : IDisposable
                     bool isChoice = false;
                     if (!isPlaying)
                     {
-                        uint pLoad = Native.GetPixel(_hdc, _cfg.LOADING_PIXEL.x, _cfg.LOADING_PIXEL.y);
+                        uint pLoad = GetPixelWithRetry(_cfg.LOADING_PIXEL.x, _cfg.LOADING_PIXEL.y);
                         if (!ColorsMatch(pLoad, 255, 255, 255))
                         {
-                            uint pLow = Native.GetPixel(_hdc, _cfg.DIALOGUE_ICON.x, _cfg.DIALOGUE_ICON.ly);
-                            uint pHigh = Native.GetPixel(_hdc, _cfg.DIALOGUE_ICON.x, _cfg.DIALOGUE_ICON.hy);
+                            uint pLow = GetPixelWithRetry(_cfg.DIALOGUE_ICON.x, _cfg.DIALOGUE_ICON.ly);
+                            uint pHigh = GetPixelWithRetry(_cfg.DIALOGUE_ICON.x, _cfg.DIALOGUE_ICON.hy);
                             isChoice = ColorsMatch(pLow, 255, 255, 255) || ColorsMatch(pHigh, 255, 255, 255);
 
                             Logger.LogDebug(() => $"Choice pixels: Low=RGB({(pLow & 0xFF)},{((pLow >> 8) & 0xFF)},{((pLow >> 16) & 0xFF)}), High=RGB({(pHigh & 0xFF)},{((pHigh >> 8) & 0xFF)},{((pHigh >> 16) & 0xFF)}) -> {isChoice}");
@@ -256,16 +295,17 @@ internal class AutoSkipper : IDisposable
                     if (isDialogue != _inDialogue)
                     {
                         _inDialogue = isDialogue;
+                        OnDialogueStateChanged?.Invoke(isDialogue);
                         string countLog = GetCountLog();
                         ResetCounter();
                         Logger.Log(isDialogue ? $"Dialogue State: [green]DETECTED[/]{countLog}" : $"Dialogue State: [yellow]ENDED[/]{countLog}");
                     }
 
-                    nextStateCheck = now + 0.15;
+                    nextStateCheck = now + (isDialogue ? ActiveDialogueCheckInterval : StateCheckInterval);
                     if (!isDialogue)
                     {
                         UpdateStatus("Idle (No Dialogue)");
-                        SleepUntil(now + 0.25);
+                        SleepUntil(now + IdleSleepInterval);
                         continue;
                     }
                 }
@@ -286,12 +326,12 @@ internal class AutoSkipper : IDisposable
                     double r2 = Random.Shared.NextDouble();
                     double r3 = Random.Shared.NextDouble();
 
-                    if (!_skipNext && r1 < 1.0/40.0) _skipNext = true;
-                    if (!_doubleNext && r2 < 1.0/35.0) _doubleNext = true;
-                    if (!_burstMode && r3 < 1.0/60.0)
+                    if (!_skipNext && r1 < SkipNextChance) _skipNext = true;
+                    if (!_doubleNext && r2 < DoubleNextChance) _doubleNext = true;
+                    if (!_burstMode && r3 < BurstModeChance)
                     {
                         _burstMode = true;
-                        _burstRemaining = Random.Shared.Next(3, 6);
+                        _burstRemaining = Random.Shared.Next(BurstRemainingMin, BurstRemainingMax);
                         string countLog = GetCountLog();
                         ResetCounter();
                         Logger.Log($"Burst mode: [red]{_burstRemaining}[/]{countLog}");
@@ -321,7 +361,7 @@ internal class AutoSkipper : IDisposable
                 if (nextStateCheck < wakeTarget) wakeTarget = nextStateCheck;
                 if (_postBurstPauseUntil > now && _postBurstPauseUntil < wakeTarget) wakeTarget = _postBurstPauseUntil;
 
-                SleepUntil(Math.Min(wakeTarget, now + 0.35));
+                SleepUntil(Math.Min(wakeTarget, now + MaxSleepInterval));
             }
         }
         catch (Exception ex)
@@ -337,7 +377,7 @@ internal class AutoSkipper : IDisposable
     
     private void PerformPress(double now)
     {
-        bool useSpace = Random.Shared.NextDouble() < (_burstMode ? 0.1 : _cfg.Config.SpaceKeyChance);
+        bool useSpace = Random.Shared.NextDouble() < (_burstMode ? BurstModeSpaceChance : SpaceKeyChance);
         string key = useSpace ? "Space" : "F";
         if (useSpace) InputSender.TapSpace(); else InputSender.TapF();
         Logger.LogDebug(() => $"Press: {key}");
@@ -354,7 +394,7 @@ internal class AutoSkipper : IDisposable
             InputSender.TapF();
             _pressCount++;
             UpdateStatus($"Skipping... [green]{_pressCount}[/] presses");
-            _postBurstPauseUntil = now + 0.4 + Random.Shared.NextDouble() * 0.6;
+            _postBurstPauseUntil = now + PostBurstPauseBase + Random.Shared.NextDouble() * PostBurstPauseRandom;
 
             Logger.LogDebug(() => "Press: F (double)");
         }
@@ -365,7 +405,7 @@ internal class AutoSkipper : IDisposable
             if (_burstRemaining <= 0)
             {
                 _burstMode = false;
-                _postBurstPauseUntil = now + 0.4 + Random.Shared.NextDouble() * 0.6;
+            _postBurstPauseUntil = now + PostBurstPauseBase + Random.Shared.NextDouble() * PostBurstPauseRandom;
             }
         }
     }
@@ -387,25 +427,31 @@ internal class AutoSkipper : IDisposable
 
     public void ToggleRun(bool on) 
     { 
-        _running = on; 
-        string countLog = "";
-        if (!on) 
+        if (_running != on)
         {
-            countLog = GetCountLog();
-            ResetCounter();
-            UpdateStatus("Paused");
+            _running = on; 
+            OnRunningStateChanged?.Invoke(on);
+            string countLog = "";
+            if (!on) 
+            {
+                countLog = GetCountLog();
+                ResetCounter();
+                UpdateStatus("Paused");
+            }
+            Logger.Log(on ? "[bold green]RUN[/]" : $"[bold yellow]PAUSE[/]{countLog}"); 
+            Wake(); 
         }
-        Logger.Log(on ? "[bold green]RUN[/]" : $"[bold yellow]PAUSE[/]{countLog}"); 
-        Wake(); 
     }
     
     public void HandleMouse4()
     {
+        Logger.LogDebug(() => "Mouse4 detected");
         if (IsGameActive()) { InputSender.TapT(); Logger.Log("Remap: T"); }
     }
 
     public void HandleMouse5()
     {
+        Logger.LogDebug(() => "Mouse5 detected");
         if (!IsGameActive()) return;
         lock (_spamLock)
         {
@@ -429,7 +475,7 @@ internal class AutoSkipper : IDisposable
                     }
                     try
                     {
-                        await Task.Delay(_cfg.Config.BurstModeDelayMs, linkedCts.Token);
+                        await Task.Delay(BurstModeDelayMs, linkedCts.Token);
                     }
                     catch (TaskCanceledException) { break; }
                 }

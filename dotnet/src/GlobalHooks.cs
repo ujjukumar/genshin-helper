@@ -11,7 +11,6 @@ internal class GlobalHooks : IDisposable
     private const int VK_F7 = 0x76;
     private const int VK_F8 = 0x77;
     private const int VK_F9 = 0x78;
-    private const int VK_F12 = 0x7B;
     
     private readonly Native.HookProc _kbdProc;
     private readonly Native.HookProc _mouseProc;
@@ -54,11 +53,6 @@ internal class GlobalHooks : IDisposable
                 case VK_F7: Logger.ToggleFileLogging(); break;
                 case VK_F8: _skipper.ToggleRun(true); break;
                 case VK_F9: _skipper.ToggleRun(false); break;
-                case VK_F12:
-                    _skipper.ShouldExit = true;
-                    _skipper.Wake();
-                    Native.PostQuitMessage(0);
-                    break;
             }
         }
         return Native.CallNextHookEx(_hKbdHook, nCode, wParam, lParam);

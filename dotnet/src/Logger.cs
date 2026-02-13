@@ -12,7 +12,8 @@ namespace AutoSkipper;
 // It uses a background thread to process and write log messages from a concurrent queue.
 public static class Logger
 {
-    private enum LogLevel { Info, Debug, Error, Success, Warning }
+    public enum LogLevel { Info, Debug, Error, Success, Warning }
+    public static event Action<DateTime, LogLevel, string>? OnLogMessage;
 
     private readonly struct LogEntry
     {
@@ -30,6 +31,7 @@ public static class Logger
 
     private static readonly BlockingCollection<LogEntry> _logQueue = new(new ConcurrentQueue<LogEntry>());
     private static readonly Task _consumerTask;
+    private static volatile bool _isShutdown = false;
 
     private static bool _verbose = false;
     private static volatile StreamWriter? _logWriter; // Volatile for thread-safe reads
@@ -46,6 +48,9 @@ public static class Logger
         {
             try
             {
+                // Invoke event for GUI
+                OnLogMessage?.Invoke(entry.Timestamp, entry.Level, entry.Message);
+
                 string timestamp = $"[grey]{entry.Timestamp:HH:mm:ss.fff}[/]";
                 string level = entry.Level switch
                 {
@@ -76,30 +81,32 @@ public static class Logger
 
     public static void Log(string message)
     {
+        if (_isShutdown) return;
         _logQueue.TryAdd(new LogEntry(LogLevel.Info, message));
     }
     
     public static void LogSuccess(string message)
     {
+        if (_isShutdown) return;
         _logQueue.TryAdd(new LogEntry(LogLevel.Success, message));
     }
     
     public static void LogWarning(string message)
     {
+        if (_isShutdown) return;
         _logQueue.TryAdd(new LogEntry(LogLevel.Warning, message));
     }
     
     public static void LogError(string message)
     {
+        if (_isShutdown) return;
         _logQueue.TryAdd(new LogEntry(LogLevel.Error, message));
     }
 
     public static void LogDebug(Func<string> messageFactory)
     {
-        if (_verbose)
-        {
-            _logQueue.TryAdd(new LogEntry(LogLevel.Debug, messageFactory()));
-        }
+        if (_isShutdown || !_verbose) return;
+        _logQueue.TryAdd(new LogEntry(LogLevel.Debug, messageFactory()));
     }
 
     public static void SetVerbose(bool verbose)
@@ -110,15 +117,16 @@ public static class Logger
 
     public static void ToggleFileLogging()
     {
-        // This is the only place where the writer is assigned or disposed, so we lock here.
         lock (_fileLock)
         {
             if (_logWriter == null)
             {
                 try
                 {
-                    // Use a buffer for performance and manually flush in the shutdown.
-                    var stream = new FileStream("autoskip_dialogue.log", FileMode.Append, FileAccess.Write, FileShare.Read);
+                    string appDataPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "AutoSkipper");
+                    Directory.CreateDirectory(appDataPath);
+                    string logPath = Path.Combine(appDataPath, "autoskip_dialogue.log");
+                    var stream = new FileStream(logPath, FileMode.Append, FileAccess.Write, FileShare.Read);
                     _logWriter = new StreamWriter(stream, Encoding.UTF8, 4096) { AutoFlush = false };
                     LogSuccess("File logging enabled.");
                 }
@@ -139,6 +147,7 @@ public static class Logger
 
     public static void Shutdown()
     {
+        _isShutdown = true;
         Log("Logger shutting down...");
         _logQueue.CompleteAdding();
 

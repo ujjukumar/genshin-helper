@@ -23,7 +23,11 @@
     <OptimizationPreference>Size</OptimizationPreference>
     
     <ApplicationManifest>app.manifest</ApplicationManifest>
+    <ApplicationIcon>Assets\auto_marker.ico</ApplicationIcon>
     <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+    <StartupObject>AutoSkipper.Program</StartupObject>
+    <ErrorReport>none</ErrorReport>
+    <DebugType>none</DebugType>
   </PropertyGroup>
 
   <ItemGroup>

@@ -43,11 +43,12 @@ internal class AutoSkipperContext : ApplicationContext
 {
     private readonly NotifyIcon _notifyIcon;
     private readonly AutoSkipper _skipper;
-    private readonly GlobalHooks _hooks;
-    private readonly Thread _logicThread;
+    private readonly GlobalHooks? _hooks;
+    private readonly Thread? _logicThread;
     private readonly LogForm _logForm;
     private Icon _defaultIcon = SystemIcons.Application;
     private Icon _activeIcon = SystemIcons.Asterisk;
+    private bool _cleanupDone = false;
 
     public AutoSkipperContext(ScreenConfig config)
     {
@@ -83,7 +84,17 @@ internal class AutoSkipperContext : ApplicationContext
         _notifyIcon.DoubleClick += (s, e) => _skipper!.ToggleRun(!_skipper!.IsRunning);
 
         _skipper = new AutoSkipper(config);
-        _hooks = new GlobalHooks(_skipper);
+        try
+        {
+            _hooks = new GlobalHooks(_skipper);
+        }
+        catch (Exception ex)
+        {
+            _skipper.Dispose();
+            _notifyIcon.Visible = false;
+            _notifyIcon.Dispose();
+            throw new InvalidOperationException($"Failed to initialize global hooks: {ex.Message}", ex);
+        }
 
         _skipper.OnDialogueStateChanged += OnDialogueStateChanged;
         _skipper.OnRunningStateChanged += OnRunningStateChanged;
@@ -114,7 +125,10 @@ internal class AutoSkipperContext : ApplicationContext
                 _defaultIcon = new Icon(stream);
                 _activeIcon = _defaultIcon;
             }
-            catch { }
+            catch (Exception ex)
+            {
+                Logger.LogWarning($"Failed to load icon: {ex.Message}");
+            }
         }
     }
 
@@ -161,22 +175,22 @@ internal class AutoSkipperContext : ApplicationContext
 
     private void Cleanup()
     {
+        if (_cleanupDone) return;
+        _cleanupDone = true;
+
         _notifyIcon.Visible = false;
         
-        if (!_logForm.IsDisposed)
-        {
-            _logForm.ForceClose();
-        }
+        _logForm.ForceClose();
 
         _skipper.ShouldExit = true;
         _skipper.Wake();
 
-        if (_logicThread.IsAlive)
+        if (_logicThread?.IsAlive == true)
         {
-            _logicThread.Join(500);
+            _logicThread.Join(1000);
         }
 
-        _hooks.Dispose();
+        _hooks?.Dispose();
         _skipper.Dispose();
         Logger.Shutdown();
     }

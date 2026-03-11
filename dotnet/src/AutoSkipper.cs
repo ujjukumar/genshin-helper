@@ -1,7 +1,4 @@
-using System;
 using System.Diagnostics;
-using System.Threading;
-using System.Threading.Tasks;
 using Spectre.Console;
 
 namespace AutoSkipper;
@@ -19,11 +16,16 @@ internal class AutoSkipper : IDisposable
     public event Action<bool>? OnRunningStateChanged;
     
     private readonly ScreenConfig _cfg;
-    private bool _running = false;
+    private volatile bool _running = false;
     public bool IsRunning => _running;
-    public bool ShouldExit = false;
+    private volatile bool _shouldExit = false;
+    public bool ShouldExit
+    {
+        get => _shouldExit;
+        set => _shouldExit = value;
+    }
     private readonly IntPtr _hdc;
-    private CancellationTokenSource _spamCancel = new();
+    private CancellationTokenSource? _spamCancel;
     private readonly object _spamLock = new();
     private readonly ManualResetEventSlim _wakeEvent = new(false);
 
@@ -75,15 +77,13 @@ internal class AutoSkipper : IDisposable
     {
         _cfg = cfg;
         _hdc = Native.GetDC(IntPtr.Zero);
-    }
-
-    ~AutoSkipper()
-    {
-        Native.ReleaseDC(IntPtr.Zero, _hdc);
+        _spamCancel = new CancellationTokenSource();
     }
 
     public void Dispose()
     {
+        _spamCancel?.Cancel();
+        _spamCancel?.Dispose();
         Native.ReleaseDC(IntPtr.Zero, _hdc);
         GC.SuppressFinalize(this);
     }
@@ -97,16 +97,7 @@ internal class AutoSkipper : IDisposable
         int length = Native.GetWindowText(hwnd, buffer, buffer.Length);
         var windowTitleSpan = buffer[..length];
 
-        bool isActive = windowTitleSpan.Equals(GenshinWindowTitle, StringComparison.OrdinalIgnoreCase);
-
-        if (!isActive)
-        {
-            // The expensive Process.GetProcessesByName call has been removed.
-            // We now only rely on the window title check.
-            // If the process not running, the window won't be in the foreground anyway.
-        }
-        
-        return isActive;
+        return windowTitleSpan.Equals(GenshinWindowTitle, StringComparison.OrdinalIgnoreCase);
     }
 
     public bool ColorsMatch(uint pixel, int r, int g, int b)
@@ -405,7 +396,7 @@ internal class AutoSkipper : IDisposable
             if (_burstRemaining <= 0)
             {
                 _burstMode = false;
-            _postBurstPauseUntil = now + PostBurstPauseBase + Random.Shared.NextDouble() * PostBurstPauseRandom;
+                _postBurstPauseUntil = now + PostBurstPauseBase + Random.Shared.NextDouble() * PostBurstPauseRandom;
             }
         }
     }
@@ -455,14 +446,20 @@ internal class AutoSkipper : IDisposable
         if (!IsGameActive()) return;
         lock (_spamLock)
         {
-            _spamCancel.Cancel();
-            _spamCancel = new();
+            _spamCancel?.Cancel();
+            _spamCancel?.Dispose();
+            _spamCancel = new CancellationTokenSource();
             var token = _spamCancel.Token;
             
             Task.Run(async () =>
             {
                 Logger.LogWarning("Burst Start");
-                ResetCounter();
+                lock (_spamLock)
+                {
+                    _pressCount = 0;
+                    _sessionStartTime = GetTime();
+                }
+                UpdateStatus("Bursting...");
                 var cts = new CancellationTokenSource(TimeSpan.FromSeconds(4));
                 using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(token, cts.Token);
                 while (!linkedCts.IsCancellationRequested)
@@ -470,8 +467,11 @@ internal class AutoSkipper : IDisposable
                     if (IsGameActive()) 
                     {
                         InputSender.TapF();
-                        _pressCount++;
-                        UpdateStatus($"Bursting... [red]{_pressCount}[/] presses");
+                        lock (_spamLock)
+                        {
+                            _pressCount++;
+                        }
+                        UpdateStatus($"Bursting...");
                     }
                     try
                     {
@@ -479,9 +479,13 @@ internal class AutoSkipper : IDisposable
                     }
                     catch (TaskCanceledException) { break; }
                 }
-                string countLog = GetCountLog();
-                Logger.LogWarning($"Burst End{countLog}");
-                ResetCounter();
+                lock (_spamLock)
+                {
+                    _pressCount = 0;
+                    _sessionStartTime = GetTime();
+                }
+                Logger.LogWarning("Burst End");
+                UpdateStatus("Ready");
             }, token);
         }
     }

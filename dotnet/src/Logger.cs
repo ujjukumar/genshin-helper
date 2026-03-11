@@ -1,9 +1,6 @@
-using System;
 using System.Collections.Concurrent;
-using System.IO;
 using System.Text;
-using System.Threading;
-using System.Threading.Tasks;
+using System.Text.RegularExpressions;
 using Spectre.Console;
 
 namespace AutoSkipper;
@@ -36,6 +33,7 @@ public static class Logger
     private static bool _verbose = false;
     private static volatile StreamWriter? _logWriter; // Volatile for thread-safe reads
     private static readonly object _fileLock = new(); // Lock for creating/disposing the writer
+    private static readonly Regex _markupRegex = new(@"\[/?[^\]]*\]", RegexOptions.Compiled);
 
     static Logger()
     {
@@ -68,8 +66,13 @@ public static class Logger
 
                 AnsiConsole.MarkupLine($"{timestamp} | {level} | {message}");
                 
-                // File logging remains plain text
-                _logWriter?.WriteLine($"{entry.Timestamp:HH:mm:ss.fff} | {entry.Level.ToString().ToUpper()} | {entry.Message}");
+                // File logging remains plain text (strip Spectre markup)
+                var writer = _logWriter;
+                if (writer != null)
+                {
+                    string plainMessage = _markupRegex.Replace(entry.Message, "");
+                    writer.WriteLine($"{entry.Timestamp:HH:mm:ss.fff} | {entry.Level.ToString().ToUpper()} | {plainMessage}");
+                }
             }
             catch (Exception ex)
             {
@@ -147,8 +150,8 @@ public static class Logger
 
     public static void Shutdown()
     {
+        _logQueue.TryAdd(new LogEntry(LogLevel.Info, "Logger shutting down..."));
         _isShutdown = true;
-        Log("Logger shutting down...");
         _logQueue.CompleteAdding();
 
         // Wait for the consumer to finish.
